@@ -107,9 +107,9 @@ def run_long_context_baseline(premise: str, hypothesis: str, llm: CachedLLM) -> 
     return {"label": lbl, "confidence": str(parsed.get("confidence") or "medium").lower(), "quote_verified": qv}
 
 
-def run_anchordoc(premise: str, hypothesis: str, item_id: str, llm: CachedLLM) -> dict[str, Any]:
+def run_anchordoc(premise: str, hypothesis: str, item_id: str, llm: CachedLLM, route: str = "auto") -> dict[str, Any]:
     adapter = LegalNDAAdapter(premise, llm)
-    v = adapter.check_clause(hypothesis, item_id=item_id)
+    v = adapter.check_clause(hypothesis, item_id=item_id, route=route)
     lbl = _norm_label(v.answer)
     # QuoteGate enforcement on pass/fail
     if lbl in {"entailment", "contradiction"} and not v.quote_verified:
@@ -121,6 +121,7 @@ def run_anchordoc(premise: str, hypothesis: str, item_id: str, llm: CachedLLM) -
         "quote_verified": v.quote_verified,
         "raw_label": _norm_label(v.answer),
         "rule_trace": v.rule_trace,
+        "route": v.retrieval_trace.get("route", "navigate"),
         "spans": v.retrieval_trace.get("spans", []),
         "followup": v.retrieval_trace.get("followup_triggered", False),
         "facts": {k: (v.facts or {}).get(k) for k in ("topic_clauses", "hyp_quantifier", "stance", "permitted_in_some_case", "counterexample", "analysis")},
@@ -175,6 +176,7 @@ def main() -> None:
     ap.add_argument("--methods", default="chunk,longctx,anchordoc", help="comma list: chunk,longctx,anchordoc")
     ap.add_argument("--per-class", type=int, default=50)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--route", default="auto", choices=["auto", "read_all", "navigate"])
     args = ap.parse_args()
 
     t0 = time.time()
@@ -189,7 +191,7 @@ def main() -> None:
         for key, name, fn in [
             ("chunk", "ChunkRAG-Direct", lambda s: run_chunk_baseline(s["premise"], s["hypothesis"], llm)),
             ("longctx", "LongContext-Direct", lambda s: run_long_context_baseline(s["premise"], s["hypothesis"], llm)),
-            ("anchordoc", "AnchorDoc (Ours)", lambda s: run_anchordoc(s["premise"], s["hypothesis"], s["id"], llm)),
+            ("anchordoc", "AnchorDoc (Ours)", lambda s: run_anchordoc(s["premise"], s["hypothesis"], s["id"], llm, route=args.route)),
         ]
         if key in wanted
     ]

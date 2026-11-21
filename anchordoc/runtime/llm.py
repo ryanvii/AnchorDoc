@@ -119,15 +119,18 @@ class CachedLLM:
         self.stats: dict[str, Any] = {
             "calls": 0,
             "cache_hits": 0,
+            "real_calls": 0,
             "prompt_tokens": 0,
+            "cached_tokens": 0,
             "completion_tokens": 0,
             "latency_sec": 0.0,
+            "real_latency_sec": 0.0,
         }
 
     def reset_stats(self) -> None:
         with self._lock:
             for k in self.stats:
-                self.stats[k] = 0.0 if k == "latency_sec" else 0
+                self.stats[k] = 0.0 if k.endswith("_sec") else 0
 
     def snapshot_stats(self) -> dict[str, Any]:
         with self._lock:
@@ -173,6 +176,7 @@ class CachedLLM:
                 self.stats["calls"] += 1
                 self.stats["cache_hits"] += 1
                 self.stats["prompt_tokens"] += int(rec.get("prompt_tokens", 0))
+                self.stats["cached_tokens"] += int(rec.get("cached_tokens", 0))
                 self.stats["completion_tokens"] += int(rec.get("completion_tokens", 0))
             return rec.get("parsed", {}), rec.get("raw", "")
 
@@ -216,12 +220,21 @@ class CachedLLM:
                 usage = getattr(resp, "usage", None)
                 pt = int(getattr(usage, "prompt_tokens", 0) or 0)
                 ct = int(getattr(usage, "completion_tokens", 0) or 0)
+                pt_details = getattr(usage, "prompt_tokens_details", None)
+                cached_pt = int(
+                    getattr(pt_details, "cached_tokens", 0)
+                    or (pt_details.get("cached_tokens", 0) if isinstance(pt_details, dict) else 0)
+                    or getattr(usage, "prompt_cache_hit_tokens", 0)
+                    or getattr(usage, "cached_tokens", 0)
+                    or 0
+                )
                 rec = {
                     "model": self.model,
                     "purpose": purpose,
                     "raw": raw,
                     "parsed": parsed,
                     "prompt_tokens": pt,
+                    "cached_tokens": cached_pt,
                     "completion_tokens": ct,
                     "latency_sec": round(dt, 3),
                 }
@@ -230,9 +243,12 @@ class CachedLLM:
                 tmp.replace(cpath)
                 with self._lock:
                     self.stats["calls"] += 1
+                    self.stats["real_calls"] += 1
                     self.stats["prompt_tokens"] += pt
+                    self.stats["cached_tokens"] += cached_pt
                     self.stats["completion_tokens"] += ct
                     self.stats["latency_sec"] += dt
+                    self.stats["real_latency_sec"] += dt
                 return parsed, raw
             except Exception as exc:
                 last_err = exc

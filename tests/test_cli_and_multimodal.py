@@ -93,7 +93,14 @@ def test_multimodal_adapter_answered_and_unanswerable(tmp_path):
         ]
     )
     adapter = MultimodalDocAdapter(doc, MockMultimodalLLM())
-    v_ok = adapter.query("What percentage is shown in Figure 1 for 2025?")
+    # Default route="auto" picks read_all on a 2-page PDF (0 retrieval LLM calls)
+    v_auto = adapter.query("What percentage is shown in Figure 1 for 2025?")
+    assert v_auto.status == "answered"
+    assert v_auto.retrieval_trace["route"] == "read_all"
+    assert v_auto.calc_value == 42.0
+
+    # Explicit route="navigate" exercises the full locate pipeline
+    v_ok = adapter.query("What percentage is shown in Figure 1 for 2025?", route="navigate")
     assert v_ok.status == "answered"
     assert v_ok.calc_value == 42.0
     assert v_ok.cited_pages == [2]

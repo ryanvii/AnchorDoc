@@ -18,12 +18,15 @@ import math
 import re
 from collections import Counter
 
+from typing import Literal
+
 from ..docbase.pdf_loader import PdfDocument
 from ..index.anchor_map import DocumentIndex
 from ..index.spancard import SpanCardIndex
 from ..runtime.llm import LLMClient
 from ..runtime.text import rrf, tokenize
 from ..types import RetrievalTrace, SpanCard
+from .router import Route, RoutePlan, Task, plan_prose_route, plan_route, profile_document
 
 _NUM_TOKEN_RE = re.compile(r"[$¥€(]?-?\d[\d,.]*%?\)?")
 _YEARISH_RE = re.compile(r"\b(?:19|20)\d{2}\b")
@@ -259,8 +262,11 @@ class AnchorRetriever:
         top_k: int = 5,
         use_anchor_map: bool = True,
         use_gap_followup: bool = True,
+        *,
+        route: Route | Literal["auto"] = "auto",
+        task: Task = "qa_text",
     ) -> RetrievalTrace:
-        """qexp -> nav (AnchorMap + G7) -> ONE locate call (-> conditional B42 followup)."""
+        """Adaptive 3-tier retrieval: read_all (0 calls) | full_pool (skip nav) | navigate (v0.6)."""
         trace = RetrievalTrace(query=query)
         toc_pgs = self.index.find_printed_toc_pages()
         trace.g7_toc_pages = toc_pgs
@@ -268,6 +274,28 @@ class AnchorRetriever:
         page_refs = self.index.resolve_page_refs(query)
         if page_refs:
             trace.layers["page_refs"] = list(page_refs)
+
+        profile = profile_document(self.doc, vision_summaries=self.index.vision_summaries)
+        plan = plan_route(profile, task=task, force=route)
+        trace.route = plan.route
+        trace.route_reason = plan.reason
+        trace.est_tokens = plan.est_tokens
+
+        # Tier 1 (read_all): 0 retrieval LLM calls — pass every physical page to the reader.
+        # For multimodal read_all, order by zero-LLM lexical RRF so the top-ranked page (not the
+        # cover page) gets the 2x2 zoom tiles; for text read_all, preserve physical page order so
+        # multi-page tables remain contiguous.
+        if plan.route == "read_all":
+            all_pages = list(range(1, self.doc.num_pages + 1))
+            if task == "qa_multimodal":
+                rrf_pages = self._lexical(query, len(all_pages))
+                ordered = _dedup(page_refs + rrf_pages + all_pages)
+                trace.layers["read_all_rrf"] = list(ordered)
+                trace.pages = ordered
+            else:
+                trace.layers["read_all_pages"] = list(all_pages)
+                trace.pages = all_pages
+            return trace
 
         # Zero-LLM fallback mode when no LLM is supplied
         if self.llm is None:
@@ -298,65 +326,74 @@ class AnchorRetriever:
         cand_rrf = self._lexical(q_exp, 10)
         trace.layers["c3_rrf"] = list(cand_rrf)
 
-        # Layer 2 (AnchorMap + G7 Printed-TOC): single-shot global structural navigation
+        # Tier 2 (full_pool): skip global nav when doc <= FULLPOOL_MAX_PAGES; feed ALL pages into
+        # one query-aware locate call under LOCATE_CHAR_BUDGET. B42 naturally no-ops (all pages in pool).
         direct_pages: list[int] = []
         range_ranked: list[int] = []
         range_pages: list[int] = []
-        if use_anchor_map and self.doc.num_pages > 8:
-            toc_text = "\n\n".join(self.doc.page_text(p) for p in toc_pgs)[:4500] if toc_pgs else ""
-            offset = self.index.calibrate_printed_offset(toc_text) if toc_text else 0
-            trace.g7_offset = offset
-            outline = self.index.build_structural_outline(max_anchors=95)
-            nav, _ = self.llm.chat_json(
-                "anchordoc_nav",
-                "You are a precision document structure navigator. Return JSON only.",
-                (
-                    f"Query: {query}\n\n"
-                    f"Printed TOC (printed page + {offset} approx physical PDF page):\n{toc_text or '(none)'}\n\n"
-                    f"Zero-LLM Structural Anchor Map (physical pages p.N):\n{outline}\n\n"
-                    "Return up to 5 specific physical PDF pages (direct_pages) and up to 2 short physical ranges "
-                    "(ranges: [start, end], max 15 pages each) most likely to hold the primary evidence.\n"
-                    'Return JSON: {"direct_pages": [int], "ranges": [[int, int]], "rationale": ""}'
-                ),
-                max_tokens=240,
-            )
-            nav = nav if isinstance(nav, dict) else {}
-            # nav direct pages are never excluded (not even TOC pages)
-            direct_pages = self._valid_pages(nav.get("direct_pages"))[:5]
-            trace.anchor_direct = list(direct_pages)
-            trace.layers["anchor_direct"] = list(direct_pages)
+        snippet_chars = 900
+        if plan.route == "full_pool":
+            pool = list(range(1, self.doc.num_pages + 1))
+            snippet_chars = plan.snippet_chars
+            trace.layers["locate_pool"] = list(pool)
+        else:
+            # Tier 3 (navigate): byte-for-byte identical to v0.6.0
+            # Layer 2 (AnchorMap + G7 Printed-TOC): single-shot global structural navigation
+            if use_anchor_map and self.doc.num_pages > 8:
+                toc_text = "\n\n".join(self.doc.page_text(p) for p in toc_pgs)[:4500] if toc_pgs else ""
+                offset = self.index.calibrate_printed_offset(toc_text) if toc_text else 0
+                trace.g7_offset = offset
+                outline = self.index.build_structural_outline(max_anchors=95)
+                nav, _ = self.llm.chat_json(
+                    "anchordoc_nav",
+                    "You are a precision document structure navigator. Return JSON only.",
+                    (
+                        f"Query: {query}\n\n"
+                        f"Printed TOC (printed page + {offset} approx physical PDF page):\n{toc_text or '(none)'}\n\n"
+                        f"Zero-LLM Structural Anchor Map (physical pages p.N):\n{outline}\n\n"
+                        "Return up to 5 specific physical PDF pages (direct_pages) and up to 2 short physical ranges "
+                        "(ranges: [start, end], max 15 pages each) most likely to hold the primary evidence.\n"
+                        'Return JSON: {"direct_pages": [int], "ranges": [[int, int]], "rationale": ""}'
+                    ),
+                    max_tokens=240,
+                )
+                nav = nav if isinstance(nav, dict) else {}
+                # nav direct pages are never excluded (not even TOC pages)
+                direct_pages = self._valid_pages(nav.get("direct_pages"))[:5]
+                trace.anchor_direct = list(direct_pages)
+                trace.layers["anchor_direct"] = list(direct_pages)
 
-            for rg in (nav.get("ranges") or [])[:2] if isinstance(nav.get("ranges"), list) else []:
-                if isinstance(rg, list) and len(rg) == 2 and all(
-                    isinstance(x, (int, float)) and not isinstance(x, bool) for x in rg
-                ):
-                    a = max(1, int(rg[0]))
-                    b = min(self.doc.num_pages, max(a, int(rg[1])), a + 20)
-                    for p in range(a, b + 1):
-                        if p not in range_pages:
-                            range_pages.append(p)
-            if range_pages:
-                range_ranked = self.index.demote_toc(self.index.rank_pages_subset(q_exp, range_pages, top_k=6))
-                trace.layers["anchor_range"] = list(range_ranked)
+                for rg in (nav.get("ranges") or [])[:2] if isinstance(nav.get("ranges"), list) else []:
+                    if isinstance(rg, list) and len(rg) == 2 and all(
+                        isinstance(x, (int, float)) and not isinstance(x, bool) for x in rg
+                    ):
+                        a = max(1, int(rg[0]))
+                        b = min(self.doc.num_pages, max(a, int(rg[1])), a + 20)
+                        for p in range(a, b + 1):
+                            if p not in range_pages:
+                                range_pages.append(p)
+                if range_pages:
+                    range_ranked = self.index.demote_toc(self.index.rank_pages_subset(q_exp, range_pages, top_k=6))
+                    trace.layers["anchor_range"] = list(range_ranked)
 
-        # Layer 3: Query-aware Locator pool (lexical ∪ nav ∪ page refs ∪ table continuations)
-        refs_in_pool = page_refs[:4]
-        seed = rrf(refs_in_pool, direct_pages, cand_rrf[:8], range_ranked, k=30)
-        cont: list[int] = []
-        for p in seed[:3]:
-            for q in self.index.continuation_neighbors(p):
-                if q not in seed[:3] and q not in cont:
-                    cont.append(q)
-        if cont:
-            trace.layers["continuation"] = list(cont)
-        # Explicit page refs and nav direct pages are guaranteed a slot; the lexical tail is
-        # what gets cut when the pool exceeds LOCATE_POOL_MAX.
-        must = _dedup(refs_in_pool + direct_pages)
-        pool = _dedup(seed[:3] + cont + seed[3:], LOCATE_POOL_MAX)
-        for p in must:
-            if p not in pool:
-                pool = pool[: LOCATE_POOL_MAX - 1] + [p] if len(pool) >= LOCATE_POOL_MAX else pool + [p]
-        trace.layers["locate_pool"] = list(pool)
+            # Layer 3: Query-aware Locator pool (lexical ∪ nav ∪ page refs ∪ table continuations)
+            refs_in_pool = page_refs[:4]
+            seed = rrf(refs_in_pool, direct_pages, cand_rrf[:8], range_ranked, k=30)
+            cont: list[int] = []
+            for p in seed[:3]:
+                for q in self.index.continuation_neighbors(p):
+                    if q not in seed[:3] and q not in cont:
+                        cont.append(q)
+            if cont:
+                trace.layers["continuation"] = list(cont)
+            # Explicit page refs and nav direct pages are guaranteed a slot; the lexical tail is
+            # what gets cut when the pool exceeds LOCATE_POOL_MAX.
+            must = _dedup(refs_in_pool + direct_pages)
+            pool = _dedup(seed[:3] + cont + seed[3:], LOCATE_POOL_MAX)
+            for p in must:
+                if p not in pool:
+                    pool = pool[: LOCATE_POOL_MAX - 1] + [p] if len(pool) >= LOCATE_POOL_MAX else pool + [p]
+            trace.layers["locate_pool"] = list(pool)
 
         weights = self._term_weights(query, f"{' '.join(trace.expanded_keywords)} {hint}")
         ranked: list[int] = []
@@ -370,7 +407,7 @@ class AnchorRetriever:
                     f"Query: {query}\n\n"
                     "Candidate pages (each block shows only the most query-relevant excerpts of that page; "
                     "'printed p.N' is the page number printed on the page, 'TOC' marks a table-of-contents page):\n"
-                    f"{self._pack_snippets(pool, weights, 900)}\n\n"
+                    f"{self._pack_snippets(pool, weights, snippet_chars)}\n\n"
                     f"Rank up to {max(top_k, 5)} pages that contain the primary evidence needed to answer, "
                     "strongest FIRST. Include every page needed when evidence spans pages (e.g. a table and its "
                     "continuation). Set sufficient=true only if the ranked pages together contain ALL evidence "
@@ -439,12 +476,25 @@ class SpanRetriever:
     def __init__(self, text: str, llm: LLMClient | None = None) -> None:
         self.index = SpanCardIndex(text)
         self.llm = llm
+        self.last_route: RoutePlan = plan_prose_route(self.index.full_text)
 
     @staticmethod
     def format_spans(spans: list[SpanCard]) -> str:
         return "\n\n".join(f"[{sp.tag} | {sp.section}]\n{sp.text}" for sp in spans)
 
-    def retrieve(self, requirement: str, top_k: int = 7, enable_followup: bool = True) -> tuple[list[SpanCard], bool]:
+    def retrieve(
+        self,
+        requirement: str,
+        top_k: int = 7,
+        enable_followup: bool = True,
+        *,
+        route: Route | Literal["auto"] = "auto",
+    ) -> tuple[list[SpanCard], bool]:
+        plan = plan_prose_route(self.index.full_text, force=route)
+        self.last_route = plan
+        if plan.route == "read_all":
+            return list(self.index.spans), False
+
         if self.llm is None:
             return self.index.retrieve(requirement, top_k=top_k, with_neighbors=True), False
 

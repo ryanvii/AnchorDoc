@@ -175,7 +175,9 @@ def test_nav_direct_toc_page_and_cover_never_excluded():
         "anchordoc_nav": {"direct_pages": [1, 2], "ranges": []},
         "anchordoc_locate": {"ranked_pages": [1], "sufficient": True, "missing_terms": []},
     })
-    tr = AnchorRetriever(doc, llm=llm).retrieve("Which notes are registered under Section 12(b)?", top_k=5)
+    tr = AnchorRetriever(doc, llm=llm).retrieve(
+        "Which notes are registered under Section 12(b)?", top_k=5, route="navigate"
+    )
     assert tr.pages[0] == 1
     assert 2 in tr.pages  # nav direct page is protected even though it is a TOC page
     assert llm.purposes() == ["anchordoc_qexp", "anchordoc_nav", "anchordoc_locate"]
@@ -209,7 +211,9 @@ def test_followup_only_when_insufficient_and_gap():
     }
     # insufficient + missing terms -> followup fires
     llm = FakeLLM({**base, "anchordoc_locate": {"ranked_pages": [8], "sufficient": False, "missing_terms": ["debt maturity"]}})
-    tr = AnchorRetriever(PdfDocument.from_pages(pages), llm=llm).retrieve("total assets and debt maturity", top_k=5)
+    tr = AnchorRetriever(PdfDocument.from_pages(pages), llm=llm).retrieve(
+        "total assets and debt maturity", top_k=5, route="navigate"
+    )
     assert tr.followup_triggered
     assert llm.purposes()[-1] == "anchordoc_followup"
     # insufficient, no missing terms, but nav overlaps lexical -> no followup
@@ -249,7 +253,9 @@ def test_continuation_neighbors_and_pool_injection():
         "anchordoc_nav": {"direct_pages": [9], "ranges": []},
         "anchordoc_locate": {"ranked_pages": [9], "sufficient": True},
     })
-    tr = AnchorRetriever(doc, llm=llm).retrieve("long-term debt accrued liabilities", top_k=5)
+    tr = AnchorRetriever(doc, llm=llm).retrieve(
+        "long-term debt accrued liabilities", top_k=5, route="navigate"
+    )
     assert 8 in tr.layers.get("continuation", [])
     assert 8 in tr.layers["locate_pool"]
     assert tr.pages[0] == 9  # continuation enters the pool without forcing a top rank

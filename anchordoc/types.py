@@ -68,6 +68,9 @@ class RetrievalTrace:
     followup_triggered: bool = False
     expanded_keywords: list[str] = field(default_factory=list)
     layers: dict[str, list[int]] = field(default_factory=dict)
+    route: str = "navigate"
+    route_reason: str = ""
+    est_tokens: int = 0
 
 
 @dataclass

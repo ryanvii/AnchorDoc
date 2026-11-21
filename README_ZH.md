@@ -7,8 +7,9 @@
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
-[![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-67.3%25%20E2E%20%7C%2048.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
+[![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
+[![MCP](https://img.shields.io/badge/MCP%20Server-零%20LLM%20四工具-0f172a.svg)](#ai-agent-渐进式-mcp-服务端零-api-key)
 
 [English](README.md) | **简体中文**
 
@@ -42,11 +43,26 @@
    - 建索引耗时 **27.6 秒（`0.33s/份`），0 次 LLM 调用**（比 CPU Dense BGE 快 **145 倍**，比 LLM 预建树快 **91 倍**）；
    - **`v0.6` 单次查询感知定位器**：页级召回跃升至 **Hit@5 `93.3%`（+8.6pp）/ AllGold@5 `89.3%`（+8.0pp）**（Dense BGE 仅 `58.0% / 48.7%`），同时单题 Prompt Token 下降 **23.8%**（`14,150 → 10,780`）、调用次数下降 **22.4%**（`5.35 → 4.15`）；
    - 端到端准确率 **`85.3%`**（**+6.6pp**，为 Dense BGE `39.3%` 的 **2.17 倍**）；全部 50 道硬数值报表题 **`100.0%` 找全 / `96.0%`（48/50）端到端准确**。
-2. **MMLongBench-Doc（NeurIPS 2024，7 份非金融多模态 PDF 含 3 份 0 字纯图 PPT，101 题）**
-   - **`SelectiveVisionIndexer`** 自动跳过全部 78 页文字页（0 成本）、仅对 92 页低字数/纯图页建视觉页卡；模型实际读到的 Top-5 页命中率达 **`93.8%`**（`AllGold@5` **`86.2%`**，**+10.8pp**）；
-   - **`v0.6` 三值证据门禁 + 2×2 高分放大**：端到端总准 **`67.3%`**（**+14.8pp**，ChunkRAG 仅 `36.6%`），文本表格 **`68.8%`**（+15.7pp），图表问答 **`48.5%`**（较 v0.5 `24.2%` **直接翻倍**），不可回答题拒答准确率 **`83.3%`**（幻觉率降至 `16.7%`），且平均 Token 反降 **9.7%**（`9,603 → 8,669`）。
-3. **ContractNLI-Long（150 条 ≥1 万字长法律合同，三态均衡 50/50/50）**
-   - **`v0.6` 两阶段逻辑 NLI + SpanCard 召回修复**：准确率与 Macro-F1 双双升至 **`81.3%`**（**+3.3pp**，明显超越“整本硬塞 Long-Context”的 `78.0%`），高置信度准确率 **`83.3%`**，误通过率（FER）降至 **`10.0%`**（比整本硬塞低 **6.0pp**）。
+2. **MMLongBench-Doc（NeurIPS 2024，7 份多模态 PDF 101 题 + 10 份未见盲测 PDF 492 页 91 题）**
+   - **`v0.7` `full_pool` + 三值门禁 + 2×2 高分放大**：7 份测试集端到端总准进一步升至 **`68.3%`**，图表问答跃升至 **`54.5%`**（较 v0.5 `24.2%` **提升 2.25 倍**），不可答拒答稳守 **`83.3%`**；
+   - **严格未见盲测（10 份全新 PDF 共 492 页，含 52 道图表题）**：检索 Hit@5 **`91.0%`**，图表问答实打实 **`50.0%`**（ChunkRAG 仅 `1.9%`），总准 **`50.5%`**（领先 ChunkRAG +19.7pp）。
+3. **ContractNLI-Long（长法律合同 150 题 `test` + 34 份未见合同 150 题 `dev` 盲测）**
+   - **`v0.7` 两阶段逻辑 NLI + 自适应 `ReadAll` 路由**：`test-150` 达 **`81.3%` F1 / `10.0%` FER**；在完全未见的 `dev-150` 盲测集上，`route=auto` 在削减 **41%** LLM 调用次数（`~3.0 → 1.77 次/题`）的同时将准确率从 `78.0%` 推升至 **`79.3%`**（Macro-F1 `79.5%`）。
+4. **文档级 SQLite WAL 持久化（`BundleStore`）**
+   - 84 份年报（12,013 页）冷解析 `22.13s` → **热重载仅 `0.330s`（快 `67.1×`，单份 `3.9 ms`）**，且持久化昂贵的 `VisionPageCard` 实现零渲染、零重复 VLM 费用热启动。
+
+---
+
+## AI Agent 渐进式 MCP 服务端（零 API Key）
+
+让 Claude Code、Cursor、Antigravity、Devin 等编码 Agent 原生、低 Token、可核验地阅读 500 页 PDF（服务端**默认 0 次外部 LLM 调用**，由宿主 Agent 自己推理）：
+
+```bash
+pip install 'anchordoc[mcp]'
+anchordoc mcp --root /path/to/pdfs
+```
+
+仅暴露 4 个硬限流正交工具（带 `--root` 目录白名单）：`doc_outline`（L0 地图 ≤1.5k tok）、`doc_locate`（L1 零 LLM 片段定位 ≤1.2k tok）、`doc_read`（L2 最多 5 页 + `p12:L07` 稳定行锚 + 防重复阅读账本）、`doc_verify`（确定性引文反查 + AST 数学验算 + 操作数溯源）。
 
 完整榜单、消融实验、成本摊销分析与复现脚本见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。
 

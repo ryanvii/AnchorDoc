@@ -26,6 +26,7 @@ class MultimodalDocAdapter:
         llm: LLMClient,
         auto_vision_index: bool = True,
         min_text_chars: int = 180,
+        store: Any = None,
     ) -> None:
         self.doc = doc
         self.llm = llm
@@ -33,7 +34,7 @@ class MultimodalDocAdapter:
         vision_summaries: dict[int, str] = {}
         if auto_vision_index:
             indexer = SelectiveVisionIndexer(llm=llm, min_text_chars=min_text_chars)
-            vision_summaries, self.vision_index_stats = indexer.index_document(doc)
+            vision_summaries, self.vision_index_stats = indexer.index_document(doc, store=store)
         self.retriever = AnchorRetriever(doc, llm=llm, vision_summaries=vision_summaries)
         self.adjudicator = FactAdjudicator(llm=llm)
 
@@ -43,8 +44,13 @@ class MultimodalDocAdapter:
         item_id: str = "mm_1",
         top_k: int = 5,
         use_vision: bool = True,
+        *,
+        route: str = "auto",
     ) -> AuditVerdict:
-        trace = self.retriever.retrieve(question, top_k=top_k, use_anchor_map=True, use_gap_followup=True)
+        task = "qa_multimodal" if use_vision else "qa_text"
+        trace = self.retriever.retrieve(
+            question, top_k=top_k, use_anchor_map=True, use_gap_followup=True, route=route, task=task  # type: ignore[arg-type]
+        )
         if use_vision:
             verdict = self.adjudicator.answer_multimodal(
                 self.doc,
@@ -52,8 +58,11 @@ class MultimodalDocAdapter:
                 trace.pages,
                 item_id=item_id,
                 vision_summaries=self.retriever.index.vision_summaries,
+                route=trace.route,  # type: ignore[arg-type]
             )
         else:
-            verdict = self.adjudicator.answer_numerical(self.doc, question, trace.pages, item_id=item_id)
+            verdict = self.adjudicator.answer_numerical(
+                self.doc, question, trace.pages, item_id=item_id, route=trace.route  # type: ignore[arg-type]
+            )
         verdict.retrieval_trace = asdict(trace)
         return verdict

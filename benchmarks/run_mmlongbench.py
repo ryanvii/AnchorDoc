@@ -127,6 +127,7 @@ def main() -> None:
     ap.add_argument("--out", default=os.environ.get("ANCHORDOC_BENCH_OUT", str(ROOT / "results/mmlongbench_101_v06.json")))
     ap.add_argument("--methods", default="chunk,text,vision", help="comma list: chunk,text,vision")
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--route", default="auto", choices=["auto", "read_all", "full_pool", "navigate"])
     args = ap.parse_args()
     wanted = {m.strip() for m in args.methods.split(",") if m.strip()}
 
@@ -171,7 +172,7 @@ def main() -> None:
         llm.reset_stats()
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             out = list(ex.map(
-                lambda ir: adapters[ir[1]["doc_id"]].query(ir[1]["question"], item_id=f"mm_{ir[0]}", top_k=5, use_vision=use_vision),
+                lambda ir: adapters[ir[1]["doc_id"]].query(ir[1]["question"], item_id=f"mm_{ir[0]}", top_k=5, use_vision=use_vision, route=args.route),
                 enumerate(rows),
             ))
         stats = llm.snapshot_stats()

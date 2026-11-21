@@ -1,3 +1,36 @@
 from .pipeline import AnchorRetriever, SpanRetriever
+from .router import (
+    DEFAULT_SNIPPET_CHARS,
+    FULLPOOL_MAX_PAGES,
+    FULLPOOL_MIN_SNIPPET,
+    LOCATE_CHAR_BUDGET,
+    MM_READALL_MAX_PAGES,
+    PROSE_READALL_MAX_TOKENS,
+    TEXT_READALL_MAX_TOKENS,
+    DocProfile,
+    Route,
+    RoutePlan,
+    Task,
+    plan_prose_route,
+    plan_route,
+    profile_document,
+)
 
-__all__ = ["AnchorRetriever", "SpanRetriever"]
+__all__ = [
+    "AnchorRetriever",
+    "SpanRetriever",
+    "DocProfile",
+    "Route",
+    "RoutePlan",
+    "Task",
+    "profile_document",
+    "plan_route",
+    "plan_prose_route",
+    "PROSE_READALL_MAX_TOKENS",
+    "TEXT_READALL_MAX_TOKENS",
+    "MM_READALL_MAX_PAGES",
+    "FULLPOOL_MAX_PAGES",
+    "LOCATE_CHAR_BUDGET",
+    "FULLPOOL_MIN_SNIPPET",
+    "DEFAULT_SNIPPET_CHARS",
+]

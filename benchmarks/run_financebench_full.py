@@ -146,6 +146,7 @@ def main() -> None:
     ap.add_argument("--backend", default="pypdfium2", choices=["pypdfium2", "pymupdf"])
     ap.add_argument("--limit", type=int, default=150)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--route", default="auto", choices=["auto", "read_all", "full_pool", "navigate"])
     args = ap.parse_args()
 
     t0 = time.time()
@@ -204,7 +205,7 @@ def main() -> None:
 
     llm.reset_stats()
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        ad_verdicts = list(ex.map(lambda q: adapters[q["doc_name"]].query(q["question"], item_id=q["financebench_id"], top_k=5), qs))
+        ad_verdicts = list(ex.map(lambda q: adapters[q["doc_name"]].query(q["question"], item_id=q["financebench_id"], top_k=5, route=args.route), qs))
     ad_stats = llm.snapshot_stats()
     p_anchor = [v.retrieval_trace.get("pages", []) for v in ad_verdicts]
 

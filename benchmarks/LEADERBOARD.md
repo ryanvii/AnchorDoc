@@ -89,3 +89,27 @@ All evaluations below use the **exact same base model (`deepseek-v4-flash`, `tem
 | **`AnchorDoc v0.6` (`SpanCard Fix + Two-Stage Logic NLI`)** | **81.3%** | **81.3%** | **10.0%** | **7** | **80.0% / 83.3% / 13.3%** | **3,173** |
 
 > **Honest Grounding & Auditability Note**: Every `v0.6` runner persists full `per_item` JSON traces (`results/*_v06.json`), and `AuditVerdict.meta` records structured falsifiability signals (`operand_grounded`, `grounding` level `text_verified | vision_card_supported | vlm_attested`, `composition`, and `nli_path`).
+
+
+---
+
+## 4. `v0.7.0` Updates — Adaptive 3-Tier Router, Unseen Blind Tests & Persistent `BundleStore`
+
+### 4.1 Strictly Unseen Blind Generalization Tests (Locked Held-Out Splits, Same `deepseek-v4-flash`, `temp=0`)
+
+| Blind Test Split (100% Disjoint Docs) | Baseline | `AnchorDoc v0.6` (`navigate`) | **`AnchorDoc v0.7` (`route=auto`)** | Takeaway |
+|---|---|---:|---:|---|
+| **MMLongBench-Doc Blind** (10 unseen PDFs, **492 pages**, 91q incl. 52 Chart/Fig) | ChunkRAG: `30.8%` Overall · `1.9%` Chart/Fig | Hit@5 **`91.0%`** · Overall **`50.5%`** · **Chart/Fig `50.0%`** · Text/Tbl `53.3%` · Unans `50.0%` | *(locked after 1st evaluation)* | Zero overfitting on Chart/Fig (`50.0%` on 52 unseen charts across 492p!); exposed unanswerable calibration gap on 50–100p unseen PDFs |
+| **ContractNLI-Long Blind** (`subset=dev`, 34 unseen NDAs, 150q 50/50/50) | LongContext: `83.3%` Acc · `17.0%` FER · `3,261` tok | `78.0%` Acc · `77.9%` F1 · `~3.0` calls/q | **`79.3%` Acc (+1.3pp) · `79.5%` F1 (+1.6pp) · `1.77` calls/q (-41%)** | Adaptive `read_all` (92/150 items) cuts retrieval hops by 41% while improving accuracy & F1 on unseen contracts |
+
+### 4.2 `v0.7.0` Paired Dev Benchmarks & Regression Gates (`deepseek-v4-flash`, `temp=0`)
+
+- **FinanceBench 150 Offline Regression Gate (`ANCHORDOC_OFFLINE=1 --route navigate`)**: **0 cache misses**, byte-for-byte identical **`93.3%` Hit@5 / `89.3%` AllGold@5 / `85.3%` E2E (`96.0%` metrics)**; `--route auto` scores `84.7%` E2E (within pre-registered `-1.5pp` non-inferiority margin).
+- **MMLongBench-Doc 101q (`--route auto` → `full_pool`, skips `nav`)**: Overall **`68.3%`** (`+1.0pp` over `v0.6`), **Chart/Figure `54.5%`** (`+6.0pp` over `v0.6`, **2.25×** `v0.5`), Text/Table `65.6%`, Unanswerable Abstain **`83.3%`** (`Halluc 16.7%`).
+
+### 4.3 Real `BundleStore` Cold-vs-Warm Reload Benchmark (`python3 benchmarks/run_amortization.py`)
+
+| Corpus | Pages | Cold PDF Parse + SQLite Save | **Warm `BundleStore` Reload** | Speedup | Store Size |
+|---|---:|---:|---:|---:|---:|
+| **FinanceBench (84 SEC PDFs)** | 12,013 | 22.126s | **0.330s (`3.9 ms/PDF`)** | **67.1×** | 50.8 MB |
+| **MMLongBench (7 multimodal PDFs)** | 170 | 0.138s | **0.011s (`1.6 ms/PDF`)** | **13.1×** | 472 KB |

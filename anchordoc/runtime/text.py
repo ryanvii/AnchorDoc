@@ -4,7 +4,19 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from typing import Iterable
+from typing import Iterable, Sequence
+
+_CJK_RE = re.compile(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\uff00-\uffef]")
+
+
+def estimate_tokens(text: str) -> int:
+    """CJK-aware fast token estimator (0 dependencies): ceil(n_cjk * 1.0 + n_other / 4.0)."""
+    s = text or ""
+    if not s:
+        return 0
+    n_cjk = len(_CJK_RE.findall(s))
+    n_other = len(s) - n_cjk
+    return int(math.ceil(n_cjk * 1.0 + n_other / 4.0))
 
 _STOPWORDS = frozenset(
     "the a an and or of to in for on with by at from as is are be was were been "
@@ -108,3 +120,15 @@ def verify_quote(quote: str, source_text: str, min_chars: int = 8) -> tuple[bool
     s_toks = set(tokenize(ns, drop_stop=False))
     overlap = (len(q_toks & s_toks) / len(q_toks)) if q_toks else 0.0
     return False, round(overlap, 3)
+
+
+def localize_quote_pages(quote: str, pages: Sequence[str], min_chars: int = 8) -> list[int]:
+    """Return 1-based physical page numbers whose text verbatim-verifies ``quote``."""
+    if not quote or not pages:
+        return []
+    hits: list[int] = []
+    for pno, txt in enumerate(pages, start=1):
+        ok, _ = verify_quote(quote, txt, min_chars=min_chars)
+        if ok:
+            hits.append(pno)
+    return hits

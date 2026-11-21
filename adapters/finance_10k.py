@@ -18,8 +18,19 @@ class Finance10KAdapter:
         self.retriever = AnchorRetriever(doc, llm=llm)
         self.adjudicator = FactAdjudicator(llm=llm)
 
-    def query(self, question: str, item_id: str = "fin_1", top_k: int = 5) -> AuditVerdict:
-        trace = self.retriever.retrieve(question, top_k=top_k, use_anchor_map=True, use_gap_followup=True)
-        verdict = self.adjudicator.answer_numerical(self.doc, question, trace.pages, item_id=item_id)
+    def query(
+        self,
+        question: str,
+        item_id: str = "fin_1",
+        top_k: int = 5,
+        *,
+        route: str = "auto",
+    ) -> AuditVerdict:
+        trace = self.retriever.retrieve(
+            question, top_k=top_k, use_anchor_map=True, use_gap_followup=True, route=route, task="qa_text"  # type: ignore[arg-type]
+        )
+        verdict = self.adjudicator.answer_numerical(
+            self.doc, question, trace.pages, item_id=item_id, route=trace.route  # type: ignore[arg-type]
+        )
         verdict.retrieval_trace = asdict(trace)
         return verdict

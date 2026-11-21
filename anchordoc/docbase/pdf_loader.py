@@ -23,6 +23,7 @@ class PdfDocument:
     # Printed page labels from the PDF /PageLabels tree (index i -> label of physical page i+1).
     # Empty list when the PDF defines no labels or the backend does not expose them.
     page_labels: list[str] = field(default_factory=list)
+    sha256: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property

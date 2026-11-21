@@ -14,8 +14,9 @@ from dataclasses import asdict
 from typing import Any
 
 from ..docbase.pdf_loader import PdfDocument
+from ..retrieve.router import Route
 from ..runtime.llm import LLMClient
-from ..runtime.text import verify_quote
+from ..runtime.text import localize_quote_pages, verify_quote
 from ..types import AuditVerdict, SpanCard
 from .answer_contract import (
     AnswerContract,
@@ -171,6 +172,36 @@ class FactAdjudicator:
                 out.append(int(p))
         return out
 
+    @staticmethod
+    def _grounding_scope(
+        doc: PdfDocument,
+        cited: list[int],
+        verified_quotes: list[str],
+        route: Route,
+        fallback: list[int],
+    ) -> tuple[list[int], str]:
+        """Determine the page scope used for operand provenance (Grounding Scope Guard).
+
+        In `read_all` mode, NEVER fall back to the entire document when the model omits
+        citations — otherwise every number anywhere in the document would pass as grounded.
+        Instead, deterministically localize pages from verbatim-verified quotes first, then
+        cited pages, and otherwise return an empty scope (``"none"``).
+        """
+        if route == "read_all":
+            localized: list[int] = []
+            for qt in verified_quotes:
+                for p in localize_quote_pages(qt, doc.pages):
+                    if p not in localized:
+                        localized.append(p)
+            if localized:
+                return localized, "quote_localized"
+            if cited:
+                return list(cited), "cited_pages"
+            return [], "none"
+        if cited:
+            return list(cited), "cited_pages"
+        return list(fallback), "retrieved_fallback"
+
     def _repair_answer(
         self,
         purpose: str,
@@ -206,6 +237,9 @@ class FactAdjudicator:
         candidate_pages: list[int],
         item_id: str = "q1",
         allow_repair: bool = True,
+        *,
+        route: Route = "navigate",
+        page_char_cap: int = 4500,
     ) -> AuditVerdict:
         """Reasoning-first verifiable QA: evidence -> operands -> formula -> reasoning -> final answer.
 
@@ -213,9 +247,11 @@ class FactAdjudicator:
           REPLACES the LLM-written number; stance answers keep their Yes/No and get the verified value.
         - Answer contract (type / scale / rounding) is inferred from the question; one repair call max.
         - Operand provenance and quote verification are recorded as structured audit fields in ``meta``.
+        - In ``read_all`` mode, all candidate pages are read and ``_grounding_scope`` prevents
+          whole-document fallback when verifying operands.
         """
-        pages = candidate_pages[:5]
-        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:4500]}" for p in pages)
+        pages = list(candidate_pages) if route == "read_all" else candidate_pages[:5]
+        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:page_char_cap]}" for p in pages)
         contract = infer_answer_contract(question)
         sys_p = (
             "You are a verifiable document auditor. Work strictly in the JSON field order given: collect evidence, "
@@ -247,17 +283,33 @@ class FactAdjudicator:
         unit = str(parsed.get("unit") or "").strip()
         ans = str(parsed.get("final_answer") or parsed.get("answer") or "").strip()
         cited = self._int_pages(parsed.get("cited_pages"), doc.num_pages)
-        src_pages = cited or pages
+
+        # Verbatim quote verification (checked first so verified quotes can localize pages in read_all)
+        ev = parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else []
+        quotes = [str(e.get("quote") or "").strip() for e in ev if isinstance(e, dict) and str(e.get("quote") or "").strip()]
+        if not quotes and parsed.get("verbatim_quote"):
+            quotes = [str(parsed.get("verbatim_quote")).strip()]
+        quote_search_src = "\n".join(doc.page_text(p) for p in (pages if route == "read_all" else (cited or pages)))
+        verified_quotes: list[str] = []
+        for qt in quotes:
+            ok, _ = verify_quote(qt, quote_search_src)
+            if ok:
+                verified_quotes.append(qt)
+        quote = verified_quotes[0] if verified_quotes else (quotes[0] if quotes else "")
+        qv = bool(verified_quotes)
+
+        src_pages, grounding_scope = self._grounding_scope(doc, cited, verified_quotes, route, fallback=pages)
         joined_src = "\n".join(doc.page_text(p) for p in src_pages)
 
         # Answer contract check -> at most one cheap repair call
         issues = check_contract(contract, ans, unit) if (can_ans and ans) else []
         repaired = False
         if issues and allow_repair:
+            repair_pages = src_pages[:2] if src_pages else pages[:2]
             fixed = self._repair_answer(
                 "anchordoc_num_repair", question, contract, issues,
                 {k: parsed.get(k) for k in ("evidence", "operands", "formula", "reasoning", "unit", "final_answer")},
-                "\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:1500]}" for p in src_pages[:2]),
+                "\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:1500]}" for p in repair_pages),
             )
             new_ans = str(fixed.get("final_answer") or "").strip()
             if new_ans:
@@ -267,22 +319,13 @@ class FactAdjudicator:
                 issues = check_contract(contract, ans, unit)
 
         calc_val = safe_calc(formula) if formula else None
-        grounded, ungrounded = operands_grounded(formula, joined_src) if formula else (True, [])
+        if grounding_scope == "none":
+            grounded, ungrounded = (False, [formula] if formula else [])
+        else:
+            grounded, ungrounded = operands_grounded(formula, joined_src) if formula else (True, [])
         ans, comp_tag = compose_numeric_answer(
             ans, calc_val, formula, contract, unit, operand_grounded=grounded
         )
-
-        # Verbatim quote verification (first verified evidence quote wins)
-        ev = parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else []
-        quotes = [str(e.get("quote") or "").strip() for e in ev if isinstance(e, dict) and str(e.get("quote") or "").strip()]
-        if not quotes and parsed.get("verbatim_quote"):
-            quotes = [str(parsed.get("verbatim_quote")).strip()]
-        quote, qv = (quotes[0] if quotes else ""), False
-        for qt in quotes:
-            ok, _ = verify_quote(qt, joined_src)
-            if ok:
-                quote, qv = qt, True
-                break
 
         if calc_val is not None:
             rule = f"NUM_PY_VERIFIED|{comp_tag}"
@@ -290,13 +333,15 @@ class FactAdjudicator:
             rule = "NUM_ANSWERED" if can_ans else "NUM_ABSTAIN"
         if formula:
             rule += "|OPERANDS_GROUNDED" if grounded else "|OPERANDS_UNGROUNDED"
+        if grounding_scope == "none":
+            rule += "|READALL_UNCITED"
         return AuditVerdict(
             item_id=item_id,
             title=question[:90],
             status="answered" if (can_ans and ans) else "abstain",
             answer=ans,
             reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
-            cited_pages=cited or pages[:2],
+            cited_pages=src_pages if route == "read_all" else (cited or pages[:2]),
             verbatim_quote=quote[:240],
             quote_verified=qv,
             rule_trace=rule,
@@ -304,6 +349,8 @@ class FactAdjudicator:
             calc_value=calc_val,
             facts=parsed,
             meta={
+                "route": route,
+                "grounding_scope": grounding_scope,
                 "answer_contract": asdict(contract),
                 "contract_issues": issues,
                 "repaired": repaired,
@@ -471,6 +518,8 @@ class FactAdjudicator:
         zoom: bool = True,
         max_total_images: int = 9,
         allow_repair: bool = True,
+        *,
+        route: Route = "navigate",
     ) -> AuditVerdict:
         """Multimodal page-image + text QA with a calibrated tri-state evidence gate.
 
@@ -592,15 +641,19 @@ class FactAdjudicator:
             )
 
         cited = self._int_pages(parsed.get("cited_pages"), doc.num_pages)
-        src_pages = cited or rendered_pages[:2]
+        verified_obs = [d for d in obs_details if verify_quote(d, "\n".join(doc.page_text(p) for p in pages))[0]]
+        src_pages, grounding_scope = self._grounding_scope(
+            doc, cited, verified_obs, route, fallback=rendered_pages[:2]
+        )
         formula = str(parsed.get("formula") or "").strip()
         issues = check_contract(contract, ans, "")
         repaired = False
         if issues and allow_repair:
+            repair_pages = src_pages[:2] if src_pages else rendered_pages[:2]
             fixed = self._repair_answer(
                 "anchordoc_mm_repair", question, contract, issues,
                 {k: parsed.get(k) for k in ("observations", "derivation", "formula", "reasoning", "final_answer")},
-                "\n\n".join(f"[Page {p}]\n{vsums.get(p, '')}\n{(doc.page_text(p) or '')[:1200]}" for p in src_pages[:2]),
+                "\n\n".join(f"[Page {p}]\n{vsums.get(p, '')}\n{(doc.page_text(p) or '')[:1200]}" for p in repair_pages),
             )
             new_ans = str(fixed.get("final_answer") or "").strip()
             if new_ans and new_ans.lower() not in _NA_ANSWERS:
@@ -622,13 +675,20 @@ class FactAdjudicator:
                 ok_c, ov_c = verify_quote(d, card_src)
                 if (ok_c or ov_c >= 0.6) and grounding == "vlm_attested":
                     grounding, quote = "vision_card_supported", d
-        grounded, ungrounded = (
-            operands_grounded(formula, page_text_src + " " + card_src + " " + " ".join(obs_details)) if formula else (True, [])
-        )
+        if grounding_scope == "none":
+            grounded, ungrounded = (False, [formula] if formula else [])
+        else:
+            grounded, ungrounded = (
+                operands_grounded(formula, page_text_src + " " + card_src + " " + " ".join(obs_details))
+                if formula
+                else (True, [])
+            )
         ans, comp_tag = compose_numeric_answer(
             ans, calc_val, formula, contract, "", operand_grounded=grounded
         )
         meta.update({
+            "route": route,
+            "grounding_scope": grounding_scope,
             "grounding": grounding,
             "contract_issues": issues,
             "repaired": repaired,
@@ -637,6 +697,9 @@ class FactAdjudicator:
             "ungrounded_operands": ungrounded,
         })
         base_rule = "MM_VISION_" + status_ev.upper() if images_b64 else "MM_TEXT_" + status_ev.upper()
+        rule_trace = f"{base_rule}|{grounding.upper()}|{comp_tag}"
+        if grounding_scope == "none":
+            rule_trace += "|READALL_UNCITED"
         return AuditVerdict(
             item_id=item_id,
             title=question[:90],
@@ -646,7 +709,7 @@ class FactAdjudicator:
             cited_pages=src_pages,
             verbatim_quote=quote[:240],
             quote_verified=grounding == "text_verified",
-            rule_trace=f"{base_rule}|{grounding.upper()}|{comp_tag}",
+            rule_trace=rule_trace,
             formula=formula,
             calc_value=calc_val,
             facts=parsed,
