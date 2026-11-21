@@ -20,6 +20,9 @@ dependencies = [
 dev = ["pytest>=8.0.0"]
 pymupdf = ["pymupdf>=1.24.0"]
 
+[project.scripts]
+anchordoc = "anchordoc.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["anchordoc*", "adapters*"]

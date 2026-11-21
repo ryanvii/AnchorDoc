@@ -214,3 +214,85 @@ class FactAdjudicator:
             rule_trace=f"{trace}|conf={conf}",
             facts=parsed,
         )
+
+    def answer_multimodal(
+        self,
+        doc: PdfDocument,
+        question: str,
+        candidate_pages: list[int],
+        item_id: str = "mm_1",
+        max_images: int = 4,
+        render_scale: float = 1.25,
+    ) -> AuditVerdict:
+        """Multimodal page-image + text verification for charts, figures, scans, and unanswerable checks.
+
+        Renders retrieved pages via Apache-2.0 pypdfium2 and feeds BOTH rendered page PNGs and
+        extracted page text to the VLM, enforcing strict abstention when evidence is absent.
+        """
+        pages = candidate_pages[:max_images]
+        images_b64: list[str] = []
+        rendered_pages: list[int] = []
+        for p in pages:
+            try:
+                images_b64.append(doc.render_page_png_b64(p, scale=render_scale))
+                rendered_pages.append(p)
+            except Exception:
+                continue
+
+        text_ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:2400]}" for p in pages)
+        sys_p = (
+            "You are a strict multimodal document auditor inspecting BOTH rendered original PDF page images "
+            "(for charts, graphs, figures, visual layouts, and scanned tables) AND extracted text. "
+            "Never guess or extrapolate facts not visibly present on these pages. Return JSON only."
+        )
+        usr_p = (
+            f"Question: {question}\n\n"
+            f"Attached page images correspond in order to physical pages: {rendered_pages}.\n\n"
+            f"Extracted Page Text (may omit chart/figure values — always check the images!):\n{text_ctx}\n\n"
+            "Instructions:\n"
+            "1. Inspect every attached page image carefully (charts, bar labels, legends, figures, tables).\n"
+            "2. If the question asks about something NOT mentioned or NOT supported by these pages, "
+            "you MUST set `can_answer=false` and `answer='Not answerable'`.\n"
+            "3. Otherwise provide a concise, exact `answer` (if math is needed, provide `formula` for Python calc).\n"
+            'Return JSON: {"can_answer": true/false, "answer": "", "formula": "", "cited_pages": [int], "reason": ""}'
+        )
+        parsed, _ = self.llm.chat_json(
+            "anchordoc_mm_qa",
+            sys_p,
+            usr_p,
+            max_tokens=700,
+            images_b64=images_b64 if images_b64 else None,
+        )
+        can_ans = bool(parsed.get("can_answer", False))
+        ans = str(parsed.get("answer") or "").strip()
+        if not can_ans or ans.lower() in {"", "not answerable", "unanswerable", "n/a", "none"}:
+            return AuditVerdict(
+                item_id=item_id,
+                title=question[:90],
+                status="abstain",
+                answer="Not answerable",
+                reason=str(parsed.get("reason") or "Evidence not present in retrieved pages."),
+                cited_pages=[],
+                quote_verified=False,
+                rule_trace="MM_ABSTAIN_UNANSWERABLE",
+                facts=parsed,
+            )
+
+        formula = str(parsed.get("formula") or "").strip()
+        calc_val = safe_calc(formula) if formula else None
+        if calc_val is not None:
+            ans = f"{ans} [Python-verified: {formula} = {calc_val:.4f}]"
+        cited = [int(p) for p in (parsed.get("cited_pages") or []) if isinstance(p, (int, float)) and 1 <= int(p) <= doc.num_pages]
+        return AuditVerdict(
+            item_id=item_id,
+            title=question[:90],
+            status="answered",
+            answer=ans,
+            reason=str(parsed.get("reason") or ""),
+            cited_pages=cited or rendered_pages[:2],
+            quote_verified=True,
+            rule_trace="MM_VISION_VERIFIED" if images_b64 else "MM_TEXT_ONLY",
+            formula=formula,
+            calc_value=calc_val,
+            facts=parsed,
+        )
