@@ -8,7 +8,7 @@ from .retrieve import AnchorRetriever, SpanRetriever
 from .runtime import BM25Okapi, CachedLLM, rrf, tokenize, verify_quote
 from .types import AuditVerdict, ExtractedRequirement, PageCard, RetrievalTrace, SourceLine, SpanCard
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "__version__",

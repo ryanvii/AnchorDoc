@@ -48,6 +48,29 @@ class MockLLM:
                 "cited_pages": [3],
                 "reason": "Computed directly from Consolidated Statements of Operations.",
             }, "{}"
+        if purpose == "anchordoc_locate":
+            return {"ranked_pages": [3, 2], "sufficient": True, "missing_terms": []}, "{}"
+        if purpose == "anchordoc_num_qa_v6":
+            return {
+                "evidence": [{"page": 3, "quote": "Revenues $1,200 Cost of sales $720"}],
+                "operands": [{"name": "Revenues", "value": "1,200", "page": 3}, {"name": "Cost of sales", "value": "720", "page": 3}],
+                "formula": "(1200 - 720) / 1200 * 100",
+                "reasoning": "Gross margin = (Revenues - Cost of sales) / Revenues.",
+                "can_answer": True,
+                "unit": "%",
+                "final_answer": "40.0%",
+                "cited_pages": [3],
+            }, "{}"
+        if purpose == "anchordoc_prose_nli_v6":
+            return {
+                "topic_clauses": ["s0001"],
+                "verbatim_quote": "Receiving Party shall not disclose Confidential Information to any third party without prior written consent.",
+                "analysis": "Explicit prohibition clause found.",
+                "hyp_quantifier": "plain",
+                "stance": "supports",
+                "permitted_in_some_case": False,
+                "counterexample": False,
+            }, "{}"
         if purpose == "anchordoc_span_qexp":
             return {"keywords": ["third parties", "disclose", "written consent"]}, "{}"
         if purpose == "anchordoc_span_gap":
@@ -107,6 +130,11 @@ def test_all_three_adapters_and_exporters(tmp_path):
     assert v_fin.calc_value == 40.0
     assert v_fin.quote_verified is True
     assert v_fin.cited_pages == [3]
+    # v0.6 locate normal path (single query-aware locator call instead of triage + rerank)
+    assert "anchordoc_locate" in llm.calls and "anchordoc_triage" not in llm.calls
+    assert v_fin.retrieval_trace["layers"]["locate_ranked"] == [3, 2]
+    assert v_fin.retrieval_trace["pages"][:2] == [3, 2]
+    assert v_fin.meta["composition"] in {"CALC_CONSISTENT", "CALC_REPLACED"}
 
     # 2. LegalNDAAdapter end-to-end
     nda = (

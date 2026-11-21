@@ -45,7 +45,19 @@ class SpanCardIndex:
             spans.append(SpanCard(1, "Document", text))
         return spans
 
-    def retrieve(self, query: str, top_k: int = 7, with_neighbors: bool = True) -> list[SpanCard]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 7,
+        with_neighbors: bool = True,
+        neighbor_char_budget: int = 2400,
+    ) -> list[SpanCard]:
+        """Dual BM25-RRF clause retrieval.
+
+        v0.6 fix: ALL ``top_k`` fused hits are always kept first; neighbours of the top-3 hits are
+        only added afterwards within ``neighbor_char_budget`` (v0.5 filled the slots with neighbours
+        first and silently dropped fused ranks 4..k).
+        """
         qt = tokenize(query)
         s_raw = self.bm_raw.get_scores(qt)
         s_card = self.bm_card.get_scores(qt)
@@ -53,13 +65,14 @@ class SpanCardIndex:
         r_card = sorted(range(len(self.spans)), key=lambda i: -s_card[i])[:20]
         fused = rrf(r_raw, r_card, k=60)[:top_k]
         if with_neighbors:
-            expanded: list[int] = []
+            selected = list(fused)
+            budget = neighbor_char_budget
             for idx in fused[:3]:
-                for nb in (idx - 1, idx, idx + 1):
-                    if 0 <= nb < len(self.spans) and nb not in expanded:
-                        expanded.append(nb)
-            for idx in fused:
-                if idx not in expanded:
-                    expanded.append(idx)
-            fused = expanded[: max(top_k, 8)]
+                for nb in (idx - 1, idx + 1):
+                    if 0 <= nb < len(self.spans) and nb not in selected:
+                        cost = len(self.spans[nb].text)
+                        if cost <= budget:
+                            selected.append(nb)
+                            budget -= cost
+            fused = selected
         return [self.spans[i] for i in sorted(fused)]

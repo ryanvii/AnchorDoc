@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -140,8 +141,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=str(ROOT / "data/financebench_merged.jsonl"))
     ap.add_argument("--pdf-dir", default=str(ROOT / "data/financebench_pdfs"))
-    ap.add_argument("--cache-dir", default=str(ROOT / "cache/financebench_full"))
-    ap.add_argument("--out", default=str(ROOT / "results/financebench_150.json"))
+    ap.add_argument("--cache-dir", default=os.environ.get("ANCHORDOC_BENCH_CACHE", str(ROOT / "cache/financebench_full")))
+    ap.add_argument("--out", default=os.environ.get("ANCHORDOC_BENCH_OUT", str(ROOT / "results/financebench_150_v06.json")))
     ap.add_argument("--backend", default="pypdfium2", choices=["pypdfium2", "pymupdf"])
     ap.add_argument("--limit", type=int, default=150)
     ap.add_argument("--workers", type=int, default=8)
@@ -262,8 +263,12 @@ def main() -> None:
                 "anchor_verdict": ja["verdict"],
                 "quote_verified": v.quote_verified,
                 "calc_used": v.calc_value is not None,
-                "anchor_answer": v.answer[:240],
+                "anchor_answer": v.answer[:400],
                 "gold_answer": str(q["answer"])[:180],
+                "rule_trace": v.rule_trace,
+                "meta": v.meta,
+                "retrieval_layers": v.retrieval_trace.get("layers", {}),
+                "followup_triggered": v.retrieval_trace.get("followup_triggered", False),
             }
             for q, g, pa, jc, ja, v in zip(qs, golds, p_anchor, j_chunk, j_anchor, ad_verdicts)
         ],

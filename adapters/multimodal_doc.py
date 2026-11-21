@@ -46,7 +46,13 @@ class MultimodalDocAdapter:
     ) -> AuditVerdict:
         trace = self.retriever.retrieve(question, top_k=top_k, use_anchor_map=True, use_gap_followup=True)
         if use_vision:
-            verdict = self.adjudicator.answer_multimodal(self.doc, question, trace.pages, item_id=item_id)
+            verdict = self.adjudicator.answer_multimodal(
+                self.doc,
+                question,
+                trace.pages,
+                item_id=item_id,
+                vision_summaries=self.retriever.index.vision_summaries,
+            )
         else:
             verdict = self.adjudicator.answer_numerical(self.doc, question, trace.pages, item_id=item_id)
         verdict.retrieval_trace = asdict(trace)

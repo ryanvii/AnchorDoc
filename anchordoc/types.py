@@ -100,3 +100,4 @@ class AuditVerdict:
     calc_value: float | None = None
     facts: dict[str, Any] = field(default_factory=dict)
     retrieval_trace: dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)  # structured audit fields (v0.6: provenance, contract, grounding)

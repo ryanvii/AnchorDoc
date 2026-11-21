@@ -6,8 +6,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
-[![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-78.7%25%20E2E%20%7C%2090%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
-[![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-95.4%25%20Hit%405-2563eb.svg)](benchmarks/LEADERBOARD.md)
+[![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
+[![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-67.3%25%20E2E%20%7C%2048.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
+[![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
 
 **English** | [简体中文](README_ZH.md)
 
@@ -15,7 +16,7 @@
 
 ---
 
-**AnchorDoc** replaces brittle chunk-based Vector RAG and expensive upfront LLM tree-indexing with a **50ms Zero-LLM Structural Anchor Map**, **Printed-TOC offset calibration**, **Selective VisionPageCards** (triggered *only* on low-text/scanned pages), and **Fact-Decoupled Deterministic Adjudication** (verbatim `QuoteGate` + safe Python AST math + conservative human escalation).
+**AnchorDoc** replaces brittle chunk-based Vector RAG and expensive upfront LLM tree-indexing with a **0.3s Zero-LLM Structural Anchor Map**, **Query-Aware Single-Shot Evidence Locator** (preserving full pages + continuation tables + printed-page labels), **Selective VisionPageCards + 2×2 Adaptive High-Res Zoom**, and **Reasoning-First Deterministic Adjudication** (authoritative Python AST math, operand provenance, tri-state visual evidence gate, and two-stage logic NLI truth tables).
 
 ![AnchorDoc Architecture](assets/architecture.svg)
 
@@ -23,12 +24,13 @@
 
 ## Why AnchorDoc?
 
-| Approach | Indexing Cost (250p PDF) | FinanceBench 150/150 E2E* | Multi-Page Recall (AllGold@5) | Scanned / Slide PDFs |
+| Approach | Indexing Cost (250p PDF) | FinanceBench 150/150 E2E* | Multi-Page Recall (AllGold@5) | MMLongBench-Doc (101q) |
 |---|---:|---:|---:|---|
-| Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | Blind |
-| Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind |
+| Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | `36.6%` (`0.0%` Chart/Fig) |
+| Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind to pure-image slides |
 | LLM Tree-Index (PageIndex-style 12p win) | `11.4s` · `19.2` calls · `33k` tok | `35.9%` *(39q subset)* | `43.6%` *(39q subset)* | Requires VLM per page |
-| **⚓ AnchorDoc `v0.5`** | **`0.32s` · `0` LLM calls** | **`78.7%` (`90.0%` numerical)** | **`81.3%` (`100%` numerical)** | **Selective `VisionPageCard` (`95.4%` Hit@5)** |
+| AnchorDoc `v0.5` | `0.32s` · `0` LLM calls | `78.7%` (`90.0%` numerical) | `81.3%` (`100%` numerical) | `52.5%` (`24.2%` Chart/Fig) |
+| **⚓ AnchorDoc `v0.6`** | **`0.33s` · `0` LLM calls** | **`85.3%` (`96.0%` numerical)** | **`89.3%` (`100%` numerical)** | **`67.3%` (`48.5%` Chart/Fig, 2.0×)** |
 
 *\*All methods benchmarked on the exact same base model (`deepseek-v4-flash`, `temperature=0`) with Apache-2.0 `pypdfium2`.*
 
@@ -39,16 +41,16 @@
 ## Verified Public Benchmarks (401 Official Questions Across 3 Modalities)
 
 - **FinanceBench (Full Official 150 / 150, 84 SEC PDFs, 12,013 pages)**
-  - **Indexing**: **26.7s total (`0.32s/PDF`), `0` LLM calls** (149× faster than CPU Dense BGE embedding, 91× faster than upfront LLM tree indexing).
-  - **Retrieval & Ablation**: **84.7% Hit@5 / 81.3% AllGold@5** (MRR `0.7719`) vs Dense BGE **58.0% / 48.7%** and Chunk-BM25 **35.3% / 32.0%**. Full ablation proves `Zero-LLM AnchorMap + G7` alone adds **+18.0pp AllGold@5**.
-  - **End-to-End QA**: **78.7% overall** (2.0× Dense BGE `39.3%`, 2.4× ChunkRAG `33.3%`). On all 50 hard numerical statement questions (`metrics-generated`), AnchorDoc achieves **100.0% AllGold@5** and **90.0% E2E accuracy** via verbatim extraction + Python AST arithmetic.
+  - **Indexing**: **27.6s total (`0.33s/PDF`), `0` LLM calls** (145× faster than CPU Dense BGE embedding, 91× faster than upfront LLM tree indexing).
+  - **Retrieval (`v0.6` Query-Aware Locator)**: **93.3% Hit@5 / 89.3% AllGold@5** (`+8.6pp` / `+8.0pp` over `v0.5`, MRR `0.8008`) vs Dense BGE **58.0% / 48.7%** and Chunk-BM25 **35.3% / 32.0%**, while cutting query prompt tokens by **23.8%** (`14,150 → 10,780`) and LLM calls by **22.4%** (`5.35 → 4.15`).
+  - **End-to-End QA**: **85.3% overall** (`+6.6pp` over `v0.5`, **2.17×** Dense BGE `39.3%`). On all 50 hard numerical statement questions (`metrics-generated`), AnchorDoc achieves **100.0% AllGold@5** and **96.0% E2E accuracy (48/50)** via reasoning-first extraction + authoritative Python AST arithmetic (`safe_calc`).
 - **MMLongBench-Doc (NeurIPS 2024 — 101 questions, 7 non-financial multimodal PDFs incl. 3 pure-image slide decks)**
-  - **Selective `VisionPageCard`** skips 100% of text-rich digital pages (`78/170`) and indexes only low-text/scanned pages (`92/170`), jumping answerable **Hit@5 from `63.1%` → `95.4%` (62/65)** vs Chunk-BM25 `44.6%`.
-  - **End-to-End**: **52.5% overall** (vs `36.6%` ChunkRAG), **53.1%** Text/Table (vs `21.9%`), **24.2%** Chart/Figure (vs `0.0%`), and **77.8%** Unanswerable Abstain accuracy (nearly halving unanswerable hallucination via strict Absence Gate).
+  - **Selective `VisionPageCard`** skips 100% of text-rich digital pages (`78/170`) and indexes only low-text/scanned pages (`92/170`). Rendering all Top-5 pages with printed-page label resolution achieves **93.8% Read-Pages Hit / 86.2% AllGold@5**.
+  - **End-to-End (`v0.6` Tri-State Gate + 2×2 High-Res Zoom)**: **67.3% overall** (`+14.8pp` over `v0.5`, vs `36.6%` ChunkRAG), **68.8%** Text/Table (`+15.7pp`), **48.5%** Chart/Figure (**2.0×** `v0.5`'s `24.2%`), and **83.3%** Unanswerable Abstain accuracy (hallucination cut to `16.7%`), while reducing prompt tokens by **9.7%** (`9,603 → 8,669`).
 - **ContractNLI-Long (EMNLP — 150 long legal NDAs `>= 10k` chars, balanced 50/50/50)**
-  - Strictly Pareto-dominates stuffing the full contract into **Long-Context Direct** (`78.1%` vs `78.0%` Macro-F1, `80.3%` vs `78.5%` high-confidence accuracy, `14.0%` vs `16.0%` false-pass rate) while using **25% fewer prompt tokens**.
+  - **Two-Stage Logic NLI + SpanCard Fix**: **81.3% Accuracy / 81.3% Macro-F1** (`+3.3pp` over stuffing the full contract into **Long-Context Direct** `78.0%`), **83.3%** high-confidence accuracy, and **10.0% False-Pass Rate** (`-6.0pp` safer than Long-Context Direct's `16.0%`).
 
-See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, ablations, and one-command reproduction scripts.
+See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, ablations, cost-amortization notes, and one-command reproduction scripts.
 
 ---
 
@@ -93,11 +95,11 @@ export_html([verdict], "report.html", doc=doc)               # Standalone two-pa
 
 ## Core Modules & Domain Adapters
 
-- `anchordoc/docbase`: Thread-safe Apache-2.0 1-based `PageModel` (`pypdfium2`) + stdlib OOXML merged-cell table grid (`w:vMerge` / `w:gridSpan` inheritance, zero false-blanks).
-- `anchordoc/index`: `Zero-LLM AnchorMap`, Printed-TOC (`G7`) offset calibrator, `SelectiveVisionIndexer` (`VisionPageCard`), and `SpanCardIndex`.
-- `anchordoc/retrieve`: Dual BM25-RRF + `C3` query expansion + `B42` two-step gap-followup + monotonic fusion with full layer-by-layer `RetrievalTrace`.
+- `anchordoc/docbase`: Thread-safe Apache-2.0 1-based `PageModel` (`pypdfium2`) + `PageLabels` + 2×2 high-res tile rendering + stdlib OOXML merged-cell table grid (`w:vMerge` / `w:gridSpan` inheritance, zero false-blanks).
+- `anchordoc/index`: `Zero-LLM AnchorMap`, Printed-TOC (`G7`) offset calibrator & soft demotion, printed-page/slide reference resolver, `SelectiveVisionIndexer` (`VisionPageCard`), and `SpanCardIndex`.
+- `anchordoc/retrieve`: Query-Aware Single-Shot Locator (`_pack_snippets`) + continuation-table expansion + conditional decorrelated `B42` gap-followup + monotonic fusion with full layer-by-layer `RetrievalTrace`.
 - `anchordoc/extract`: Line-anchored `[sNNNNN]` requirement extraction with automatic verbatim quote-repair loop.
-- `anchordoc/adjudicate`: Fact-decoupled adjudicator with programmatic `QuoteGate`, safe Python AST arithmetic (`safe_calc`), unit-safe comparison (prevents `48 hours` vs `48 days` bugs), strict visual Absence Gate, and conservative truth table.
+- `anchordoc/adjudicate`: Reasoning-first verifiable adjudicator with deterministic `AnswerContract`, authoritative Python AST arithmetic (`safe_calc` with bounded `**` & percentage semantics), operand provenance check, tri-state visual evidence gate (`stated | derivable | absent`), conservative entity/year attestation, and deterministic truth tables (`decide_compliance`, `decide_nli`).
 - `anchordoc/report`: JSON, Markdown, and zero-server interactive two-pane HTML trace workbench with embedded original PDF page previews.
 - `adapters/`: Thin domain plugins — `finance_10k`, `legal_nda`, `multimodal_doc`, `procurement_demo`.
 
@@ -112,12 +114,8 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine},
   year    = {2026},
-  version = {0.5.0},
+  version = {0.6.0},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
 }
 ```
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE). Core dependencies are strictly Apache-2.0 / MIT / BSD compatible; copyleft accelerators (e.g., PyMuPDF) are optional extras only.

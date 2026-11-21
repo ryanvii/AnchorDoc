@@ -9,8 +9,8 @@ authors:
 repository-code: "https://github.com/ryanvii/AnchorDoc"
 url: "https://github.com/ryanvii/AnchorDoc"
 license: Apache-2.0
-version: "0.5.0"
-date-released: "2026-11-21"
+version: "0.6.0"
+date-released: "2026-11-22"
 keywords:
   - document-ai
   - vectorless-rag

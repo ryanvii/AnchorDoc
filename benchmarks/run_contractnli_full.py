@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -114,7 +115,16 @@ def run_anchordoc(premise: str, hypothesis: str, item_id: str, llm: CachedLLM) -
     if lbl in {"entailment", "contradiction"} and not v.quote_verified:
         lbl = "neutral"
     conf = str((v.facts or {}).get("confidence") or "medium").lower()
-    return {"label": lbl, "confidence": conf, "quote_verified": v.quote_verified}
+    return {
+        "label": lbl,
+        "confidence": conf,
+        "quote_verified": v.quote_verified,
+        "raw_label": _norm_label(v.answer),
+        "rule_trace": v.rule_trace,
+        "spans": v.retrieval_trace.get("spans", []),
+        "followup": v.retrieval_trace.get("followup_triggered", False),
+        "facts": {k: (v.facts or {}).get(k) for k in ("topic_clauses", "hyp_quantifier", "stance", "permitted_in_some_case", "counterexample", "analysis")},
+    }
 
 
 def score_preds(preds: list[dict], golds: list[str], stats: dict) -> dict[str, Any]:
@@ -160,8 +170,9 @@ def score_preds(preds: list[dict], golds: list[str], stats: dict) -> dict[str, A
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=str(ROOT / "data/contract_nli_long.jsonl"))
-    ap.add_argument("--cache-dir", default=str(ROOT / "cache/contractnli_full"))
-    ap.add_argument("--out", default=str(ROOT / "results/contractnli_150.json"))
+    ap.add_argument("--cache-dir", default=os.environ.get("ANCHORDOC_BENCH_CACHE", str(ROOT / "cache/contractnli_full")))
+    ap.add_argument("--out", default=os.environ.get("ANCHORDOC_BENCH_OUT", str(ROOT / "results/contractnli_150_v06.json")))
+    ap.add_argument("--methods", default="chunk,longctx,anchordoc", help="comma list: chunk,longctx,anchordoc")
     ap.add_argument("--per-class", type=int, default=50)
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
@@ -172,19 +183,27 @@ def main() -> None:
     print(f"ContractNLI-Long Run: N={len(sample)} ({dict(Counter(golds))})")
 
     llm = CachedLLM(cache_dir=args.cache_dir)
+    wanted = {m.strip() for m in args.methods.split(",") if m.strip()}
     runners = [
-        ("ChunkRAG-Direct", lambda s: run_chunk_baseline(s["premise"], s["hypothesis"], llm)),
-        ("LongContext-Direct", lambda s: run_long_context_baseline(s["premise"], s["hypothesis"], llm)),
-        ("AnchorDoc (Ours)", lambda s: run_anchordoc(s["premise"], s["hypothesis"], s["id"], llm)),
+        (key, name, fn)
+        for key, name, fn in [
+            ("chunk", "ChunkRAG-Direct", lambda s: run_chunk_baseline(s["premise"], s["hypothesis"], llm)),
+            ("longctx", "LongContext-Direct", lambda s: run_long_context_baseline(s["premise"], s["hypothesis"], llm)),
+            ("anchordoc", "AnchorDoc (Ours)", lambda s: run_anchordoc(s["premise"], s["hypothesis"], s["id"], llm)),
+        ]
+        if key in wanted
     ]
 
-    summary: dict[str, Any] = {"model": llm.model, "n": len(sample), "methods": {}}
-    for name, fn in runners:
+    summary: dict[str, Any] = {"model": llm.model, "n": len(sample), "methods": {}, "per_item": {}}
+    for _key, name, fn in runners:
         llm.reset_stats()
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             preds = list(ex.map(fn, sample))
         m = score_preds(preds, golds, llm.snapshot_stats())
         summary["methods"][name] = m
+        summary["per_item"][name] = [
+            {"id": s["id"], "gold": s["gold"], "hypothesis": s["hypothesis"][:160], **p} for s, p in zip(sample, preds)
+        ]
         print(
             f"  {name:20s} | Acc={m['accuracy_%']:5.1f}% | MacroF1={m['macro_f1_%']:5.1f}% | "
             f"FER={m['false_pass_rate_%']:5.1f}% (C->E:{m['contra_to_ent']}) | "

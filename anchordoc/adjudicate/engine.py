@@ -1,13 +1,38 @@
-"""Fact-Decoupled Verifiable Adjudicator with Quote Gate and Deterministic Truth Table."""
+"""Fact-Decoupled Verifiable Adjudicator with Quote Gate and Deterministic Truth Tables.
+
+v0.6 design principles (all domain-agnostic):
+- Reasoning-first JSON schemas: evidence -> operands/observations -> formula -> reasoning -> final answer.
+- Python arithmetic is authoritative; LLM-written numbers never override ``safe_calc`` results.
+- LLMs extract facts; deterministic truth tables (``decide_compliance`` / ``decide_nli``) decide verdicts.
+- Grounding is reported honestly in ``AuditVerdict.meta`` (never hard-coded as verified).
+"""
 from __future__ import annotations
 
+import json
+import re
+from dataclasses import asdict
 from typing import Any
 
 from ..docbase.pdf_loader import PdfDocument
 from ..runtime.llm import LLMClient
 from ..runtime.text import verify_quote
 from ..types import AuditVerdict, SpanCard
+from .answer_contract import (
+    AnswerContract,
+    check_contract,
+    compose_numeric_answer,
+    infer_answer_contract,
+    operands_grounded,
+    unattested_terms,
+)
 from .calc import safe_calc
+
+_NA_ANSWERS = frozenset({"", "not answerable", "unanswerable", "n/a", "none", "not available", "cannot be determined"})
+_VISUAL_CUE_RE = re.compile(
+    r"\b(?:how\s+many|count|colou?rs?|charts?|graphs?|figures?|legends?|images?|pictures?|photos?|logos?|diagrams?|"
+    r"maps?|icons?|axis|bars?|pie|slides?|screenshots?|people|persons)\b",
+    re.I,
+)
 
 
 def decide_compliance(
@@ -55,67 +80,237 @@ def decide_compliance(
     return "needs_review", "R7_CONSERVATIVE_REVIEW"
 
 
+
+def _as_bool(val: Any) -> bool:
+    """Robust bool parsing for LLM JSON (handles "false"/"no"/"0" strings)."""
+    if isinstance(val, str):
+        return val.strip().lower() in {"true", "yes", "1", "y"}
+    return bool(val)
+
+
+def decide_nli(facts: dict[str, Any], quote_verified: bool = False) -> tuple[str, str, str]:
+    """Deterministic NLI truth table over LLM-extracted facts (dual-fact agreement + calibrated confidence).
+
+    Returns (label, rule_path, confidence) with label in {entailment, contradiction, neutral}.
+    Pure logic, no domain vocabulary:
+    - no governing clause and stance silent                         -> neutral (high confidence)
+    - existential hypothesis: require BOTH permitted_in_some_case AND stance=supports for entailment;
+      conflicting facts (permitted=True while stance!=supports) abstain to neutral (low confidence)
+    - universal hypothesis: require BOTH counterexample AND stance=opposes for counterexample path;
+      conflicting facts (counterexample=True while stance!=opposes) abstain to neutral (low confidence)
+    - otherwise follow the extracted stance (supports / opposes / silent)
+    Confidence is derived from rule-path reliability + quote verification, not self-reported.
+    """
+    topic = facts.get("topic_clauses")
+    has_topic = bool(topic) if isinstance(topic, list) else bool(str(topic or "").strip())
+    stance = str(facts.get("stance") or "silent").strip().lower()
+    if stance not in {"supports", "opposes", "silent"}:
+        stance = "supports" if "support" in stance or "entail" in stance else ("opposes" if "oppos" in stance or "contra" in stance else "silent")
+    quant = str(facts.get("hyp_quantifier") or "plain").strip().lower()
+    permitted = _as_bool(facts.get("permitted_in_some_case"))
+    counter = _as_bool(facts.get("counterexample"))
+
+    if not has_topic and stance == "silent":
+        return "neutral", "NLI_TOPIC_ABSENT", "high"
+    if quant == "existential":
+        if permitted and stance == "supports":
+            label, path, agreed = "entailment", "NLI_EXISTENTIAL_WITNESS", True
+        elif permitted and stance != "supports":
+            return "neutral", "NLI_EXISTENTIAL_CONFLICT", "low"
+        elif stance == "opposes":
+            label, path, agreed = "contradiction", "NLI_EXISTENTIAL_EXCLUDED", True
+        elif stance == "supports":
+            label, path, agreed = "entailment", "NLI_STANCE_SUPPORTS", True
+        else:
+            label, path, agreed = "neutral", "NLI_TOPIC_SILENT", False
+    elif quant == "universal":
+        if counter and stance == "opposes":
+            label, path, agreed = "contradiction", "NLI_UNIVERSAL_COUNTEREXAMPLE", True
+        elif counter and stance != "opposes":
+            return "neutral", "NLI_UNIVERSAL_CONFLICT", "low"
+        elif stance == "opposes":
+            label, path, agreed = "contradiction", "NLI_STANCE_OPPOSES", True
+        elif stance == "supports":
+            label, path, agreed = "entailment", "NLI_STANCE_SUPPORTS", True
+        else:
+            label, path, agreed = "neutral", "NLI_TOPIC_SILENT", False
+    else:
+        if stance == "supports":
+            label, path, agreed = "entailment", "NLI_STANCE_SUPPORTS", True
+        elif stance == "opposes":
+            label, path, agreed = "contradiction", "NLI_STANCE_OPPOSES", True
+        else:
+            label, path, agreed = "neutral", "NLI_TOPIC_SILENT", False
+
+    if label == "neutral":
+        conf = "low" if has_topic else "medium"
+    elif agreed and quote_verified and has_topic:
+        conf = "high"
+    elif quote_verified or has_topic:
+        conf = "medium"
+    else:
+        conf = "low"
+    return label, path, conf
+
+
 class FactAdjudicator:
     """Domain-agnostic verifiable adjudicator supporting numerical QA, compliance checks, and prose NLI."""
 
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
 
+
+    # ------------------------------------------------------------------
+    # Shared helpers (v0.6)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _int_pages(vals: Any, num_pages: int) -> list[int]:
+        out: list[int] = []
+        for p in vals or []:
+            if isinstance(p, (int, float)) and not isinstance(p, bool) and 1 <= int(p) <= num_pages and int(p) not in out:
+                out.append(int(p))
+        return out
+
+    def _repair_answer(
+        self,
+        purpose: str,
+        question: str,
+        contract: AnswerContract,
+        issues: list[str],
+        previous: dict[str, Any],
+        context: str,
+    ) -> dict[str, Any]:
+        """At most ONE cheap repair call when the answer violates the deterministic contract."""
+        sys_p = "You are a verifiable document auditor fixing the FORM of an answer. Return JSON only."
+        usr_p = (
+            f"Question: {question}\n"
+            f"Expected answer: {contract.describe()}\n"
+            f"Detected problems: {', '.join(issues)}\n\n"
+            f"Previous extraction (JSON):\n{json.dumps(previous, ensure_ascii=False)[:2500]}\n\n"
+            f"Source excerpt:\n{context[:3000]}\n\n"
+            "Fix ONLY the detected problems using figures that appear above (e.g., convert a percentage into a count "
+            "using the stated base size n, or convert the amount into the requested scale). If the needed figure is not "
+            "available, keep the previous answer.\n"
+            'Return JSON: {"formula": "", "unit": "", "final_answer": ""}'
+        )
+        fixed, _ = self.llm.chat_json(purpose, sys_p, usr_p, max_tokens=400)
+        return fixed if isinstance(fixed, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Numerical / financial QA (v0.6: reasoning-first + deterministic composer)
+    # ------------------------------------------------------------------
     def answer_numerical(
         self,
         doc: PdfDocument,
         question: str,
         candidate_pages: list[int],
         item_id: str = "q1",
+        allow_repair: bool = True,
     ) -> AuditVerdict:
-        """Fact-decoupled verifiable numerical/financial QA with Python AST arithmetic."""
+        """Reasoning-first verifiable QA: evidence -> operands -> formula -> reasoning -> final answer.
+
+        - Python (``safe_calc``) is authoritative for arithmetic: for numeric answers the computed value
+          REPLACES the LLM-written number; stance answers keep their Yes/No and get the verified value.
+        - Answer contract (type / scale / rounding) is inferred from the question; one repair call max.
+        - Operand provenance and quote verification are recorded as structured audit fields in ``meta``.
+        """
         pages = candidate_pages[:5]
         ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:4500]}" for p in pages)
+        contract = infer_answer_contract(question)
         sys_p = (
-            "You are a verifiable document auditor. Extract exact raw figures and quotes from the pages "
-            "and write a pure arithmetic formula when calculation is needed (Python computes the exact result). "
-            "Never fabricate figures not present in the pages. Return JSON only."
+            "You are a verifiable document auditor. Work strictly in the JSON field order given: collect evidence, "
+            "list operands, write a formula, reason, and ONLY THEN state the final answer (never decide the answer "
+            "before the evidence and computation). Python computes formulas exactly. Never fabricate figures. "
+            "Return JSON only."
         )
         usr_p = (
             f"Question: {question}\n\n"
             f"Retrieved Pages:\n{ctx}\n\n"
+            f"Expected answer form: {contract.describe()}.\n\n"
             "Instructions:\n"
-            "1. Answer concisely and directly based ONLY on these pages (if the question asks whether a metric "
-            "is useful or explicitly reported, inspect the financial statement and answer directly).\n"
-            "2. If arithmetic is needed, set `formula` to a pure math expression using ONLY numbers and +-*/() "
-            "(Python will compute the exact value).\n"
-            "3. Set `can_answer=false` ONLY when the primary evidence needed to answer is genuinely absent.\n"
-            "4. Keep `verbatim_quote` concise (<= 220 chars) and `reason` brief (1-2 sentences).\n"
-            'Return JSON: {"can_answer": true/false, "answer": "", "formula": "", "unit": "", '
-            '"cited_pages": [int], "verbatim_quote": "", "reason": ""}'
+            "1. evidence: up to 4 items copied VERBATIM from the pages (<= 200 chars each) with their page number.\n"
+            "2. operands: every raw figure you use, exactly as printed, with its page (watch table scale such as "
+            "'in millions', the reporting period, and the exact entity/segment asked).\n"
+            "3. formula: a pure arithmetic expression using ONLY numbers and + - * / ( ) ** (Python computes it); "
+            "empty if no calculation is needed.\n"
+            "4. reasoning: <= 4 short sentences. If the question asks whether a metric is useful/relevant or whether "
+            "something is healthy/improving, first compute or locate the metric, then judge it.\n"
+            "5. can_answer=false ONLY when the primary evidence needed is genuinely absent from these pages.\n"
+            "6. final_answer: concise and consistent with the reasoning and formula; yes/no stance FIRST when applicable.\n"
+            'Return JSON: {"evidence": [{"page": 0, "quote": ""}], "operands": [{"name": "", "value": "", "page": 0}], '
+            '"formula": "", "reasoning": "", "can_answer": true, "unit": "", "final_answer": "", "cited_pages": [0]}'
         )
-        parsed, _ = self.llm.chat_json("anchordoc_num_qa", sys_p, usr_p, max_tokens=1100)
-        can_ans = bool(parsed.get("can_answer", True))
+        parsed, _ = self.llm.chat_json("anchordoc_num_qa_v6", sys_p, usr_p, max_tokens=1400)
+        parsed = parsed if isinstance(parsed, dict) else {}
+        can_ans = _as_bool(parsed.get("can_answer", True))
         formula = str(parsed.get("formula") or "").strip()
+        unit = str(parsed.get("unit") or "").strip()
+        ans = str(parsed.get("final_answer") or parsed.get("answer") or "").strip()
+        cited = self._int_pages(parsed.get("cited_pages"), doc.num_pages)
+        src_pages = cited or pages
+        joined_src = "\n".join(doc.page_text(p) for p in src_pages)
+
+        # Answer contract check -> at most one cheap repair call
+        issues = check_contract(contract, ans, unit) if (can_ans and ans) else []
+        repaired = False
+        if issues and allow_repair:
+            fixed = self._repair_answer(
+                "anchordoc_num_repair", question, contract, issues,
+                {k: parsed.get(k) for k in ("evidence", "operands", "formula", "reasoning", "unit", "final_answer")},
+                "\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:1500]}" for p in src_pages[:2]),
+            )
+            new_ans = str(fixed.get("final_answer") or "").strip()
+            if new_ans:
+                ans, repaired = new_ans, True
+                formula = str(fixed.get("formula") or "").strip() or formula
+                unit = str(fixed.get("unit") or "").strip() or unit
+                issues = check_contract(contract, ans, unit)
+
         calc_val = safe_calc(formula) if formula else None
-        ans = str(parsed.get("answer") or "").strip()
+        grounded, ungrounded = operands_grounded(formula, joined_src) if formula else (True, [])
+        ans, comp_tag = compose_numeric_answer(
+            ans, calc_val, formula, contract, unit, operand_grounded=grounded
+        )
+
+        # Verbatim quote verification (first verified evidence quote wins)
+        ev = parsed.get("evidence") if isinstance(parsed.get("evidence"), list) else []
+        quotes = [str(e.get("quote") or "").strip() for e in ev if isinstance(e, dict) and str(e.get("quote") or "").strip()]
+        if not quotes and parsed.get("verbatim_quote"):
+            quotes = [str(parsed.get("verbatim_quote")).strip()]
+        quote, qv = (quotes[0] if quotes else ""), False
+        for qt in quotes:
+            ok, _ = verify_quote(qt, joined_src)
+            if ok:
+                quote, qv = qt, True
+                break
+
         if calc_val is not None:
-            unit = str(parsed.get("unit") or "").strip()
-            ans = f"{ans} [Python-verified: {formula} = {calc_val:.4f} {unit}]".strip()
-
-        quote = str(parsed.get("verbatim_quote") or "").strip()
-        cited = [int(p) for p in (parsed.get("cited_pages") or []) if isinstance(p, (int, float)) and 1 <= int(p) <= doc.num_pages]
-        joined_src = "\n".join(doc.page_text(p) for p in (cited or pages))
-        qv, _ = verify_quote(quote, joined_src) if quote else (False, 0.0)
-
+            rule = f"NUM_PY_VERIFIED|{comp_tag}"
+        else:
+            rule = "NUM_ANSWERED" if can_ans else "NUM_ABSTAIN"
+        if formula:
+            rule += "|OPERANDS_GROUNDED" if grounded else "|OPERANDS_UNGROUNDED"
         return AuditVerdict(
             item_id=item_id,
             title=question[:90],
             status="answered" if (can_ans and ans) else "abstain",
             answer=ans,
-            reason=str(parsed.get("reason") or ""),
+            reason=str(parsed.get("reasoning") or parsed.get("reason") or ""),
             cited_pages=cited or pages[:2],
-            verbatim_quote=quote,
+            verbatim_quote=quote[:240],
             quote_verified=qv,
-            rule_trace="NUM_PY_VERIFIED" if calc_val is not None else ("NUM_ANSWERED" if can_ans else "NUM_ABSTAIN"),
+            rule_trace=rule,
             formula=formula,
             calc_value=calc_val,
             facts=parsed,
+            meta={
+                "answer_contract": asdict(contract),
+                "contract_issues": issues,
+                "repaired": repaired,
+                "composition": comp_tag,
+                "operand_grounded": grounded,
+                "ungrounded_operands": ungrounded,
+            },
         )
 
     def audit_compliance_item(
@@ -169,6 +364,10 @@ class FactAdjudicator:
             facts=facts,
         )
 
+
+    # ------------------------------------------------------------------
+    # Prose NLI (v0.6: fact extraction -> deterministic truth table)
+    # ------------------------------------------------------------------
     def audit_prose_clause(
         self,
         full_text: str,
@@ -176,44 +375,89 @@ class FactAdjudicator:
         spans: list[SpanCard],
         item_id: str = "clause_1",
     ) -> AuditVerdict:
-        """Grounded prose compliance check with calibrated confidence for selective prediction."""
+        """Two-stage grounded NLI: the LLM extracts topic/modality/quantifier facts; ``decide_nli`` labels.
+
+        Backward compatible: ``answer`` is the label (entailment|contradiction|neutral), ``status`` maps to
+        pass / fail / needs_review, and ``facts['confidence']`` carries a rule-derived confidence tier.
+        """
         ctx = "\n\n".join(f"[{sp.tag} | {sp.section}]\n{sp.text}" for sp in spans)
-        sys_p = "You are a precise legal/compliance clause reviewer. Return JSON only."
-        usr_p = (
-            f"Compliance Requirement:\n{hypothesis}\n\n"
-            f"Retrieved Clauses:\n{ctx}\n\n"
-            "Determine whether the document entails ('pass'), contradicts ('fail'), or does not mention ('needs_review') "
-            "the requirement. Provide an exact verbatim quote if pass/fail, and a calibrated confidence ('high'|'medium'|'low').\n"
-            'Return JSON: {"label": "entailment|contradiction|neutral", "confidence": "high|medium|low", '
-            '"verbatim_quote": "", "reason": ""}'
+        sys_p = (
+            "You are a precise contract analyst doing natural language inference between a contract and a hypothesis. "
+            "You only extract facts; a deterministic rule engine assigns the final label. Return JSON only."
         )
-        parsed, _ = self.llm.chat_json("anchordoc_prose_audit", sys_p, usr_p, max_tokens=280)
-        raw_lbl = str(parsed.get("label") or "neutral").strip().lower()
+        usr_p = (
+            f"Hypothesis:\n{hypothesis}\n\n"
+            f"Retrieved Clauses:\n{ctx}\n\n"
+            "Fill the fields in order:\n"
+            "1. topic_clauses: tags (e.g. \"s0012\") of clauses governing the SAME subject matter as the hypothesis "
+            "(same party, action and object), or [] if none.\n"
+            "2. verbatim_quote: exact word-for-word substring of the most relevant clause ('' if none).\n"
+            "3. analysis: <= 3 sentences comparing clause and hypothesis; pay attention to modality (shall / may / "
+            "shall not), quantifiers (some / all / only / any) and conditions.\n"
+            "4. hyp_quantifier: 'existential' if the hypothesis only claims something is permitted/possible/true in at "
+            "least SOME case (e.g. 'may ... some ...', 'in some circumstances'); 'universal' if it claims something holds "
+            "for ALL cases or ONLY in a restricted way ('all', 'only', 'any', 'never', 'shall not ... any'); otherwise 'plain'.\n"
+            "5. stance: 'supports' if the contract states or clearly implies the hypothesis; 'opposes' if the contract "
+            "states or clearly implies its negation (e.g. prohibits what the hypothesis permits, or permits/requires what "
+            "it forbids); 'silent' if the governing clauses do not settle the specific point.\n"
+            "6. permitted_in_some_case (bool): the contract allows or requires what the hypothesis describes in at least "
+            "one case, even if subject to conditions, consent, request or legal requirements.\n"
+            "7. counterexample (bool): the contract explicitly provides a case that falsifies the hypothesis's universal "
+            "claim (covers what the hypothesis excludes, or allows an exception the hypothesis rules out).\n"
+            'Return JSON: {"topic_clauses": [], "verbatim_quote": "", "analysis": "", "hyp_quantifier": "plain", '
+            '"stance": "silent", "permitted_in_some_case": false, "counterexample": false}'
+        )
+        parsed, _ = self.llm.chat_json("anchordoc_prose_nli_v6", sys_p, usr_p, max_tokens=450)
+        parsed = parsed if isinstance(parsed, dict) else {}
         quote = str(parsed.get("verbatim_quote") or "").strip()
         qv, _ = verify_quote(quote, full_text) if quote else (False, 0.0)
-        conf = str(parsed.get("confidence") or "medium").strip().lower()
+        label, path, conf = decide_nli(parsed, quote_verified=qv)
 
-        if raw_lbl == "entailment":
+        if label == "entailment":
             status = "pass" if qv else "needs_review"
-            trace = "PROSE_VERIFIED_ENTAILMENT" if qv else "PROSE_UNVERIFIED_BLOCKED"
-        elif raw_lbl == "contradiction":
+        elif label == "contradiction":
             status = "fail" if qv else "needs_review"
-            trace = "PROSE_VERIFIED_CONTRADICTION" if qv else "PROSE_UNVERIFIED_BLOCKED"
         else:
             status = "needs_review"
-            trace = "PROSE_NEUTRAL"
-
+        if label != "neutral" and not qv:
+            path = f"{path}|PROSE_UNVERIFIED_BLOCKED"
+        facts = dict(parsed)
+        facts["label"] = label
+        facts["confidence"] = conf
         return AuditVerdict(
             item_id=item_id,
             title=hypothesis[:90],
             status=status,
-            answer=raw_lbl,
-            reason=str(parsed.get("reason") or ""),
+            answer=label,
+            reason=str(parsed.get("analysis") or parsed.get("reason") or ""),
             verbatim_quote=quote,
             quote_verified=qv,
-            rule_trace=f"{trace}|conf={conf}",
-            facts=parsed,
+            rule_trace=f"{path}|conf={conf}",
+            facts=facts,
+            meta={"nli_path": path, "confidence_source": "rule_path"},
         )
+
+    # ------------------------------------------------------------------
+    # Multimodal QA (v0.6: tri-state evidence gate + visual fidelity)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _pick_zoom_page(
+        doc: PdfDocument,
+        question: str,
+        rendered_pages: list[int],
+        vision_summaries: dict[int, str],
+    ) -> int | None:
+        """Choose the top-ranked page to zoom: visual question cue, or a low-text chart/figure page."""
+        if not rendered_pages:
+            return None
+        top = rendered_pages[0]
+        if _VISUAL_CUE_RE.search(question or ""):
+            return top
+        vs = (vision_summaries or {}).get(top, "")
+        low_text = len((doc.page_text(top) or "").strip()) < 180
+        if low_text and re.search(r"\[VISION:(?:CHART|FIGURE|TABLE|SLIDE)\]", vs):
+            return top
+        return None
 
     def answer_multimodal(
         self,
@@ -221,14 +465,22 @@ class FactAdjudicator:
         question: str,
         candidate_pages: list[int],
         item_id: str = "mm_1",
-        max_images: int = 4,
+        max_images: int = 5,
         render_scale: float = 1.25,
+        vision_summaries: dict[int, str] | None = None,
+        zoom: bool = True,
+        max_total_images: int = 9,
+        allow_repair: bool = True,
     ) -> AuditVerdict:
-        """Multimodal page-image + text verification for charts, figures, scans, and unanswerable checks.
+        """Multimodal page-image + text QA with a calibrated tri-state evidence gate.
 
-        Renders retrieved pages via Apache-2.0 pypdfium2 and feeds BOTH rendered page PNGs and
-        extracted page text to the VLM, enforcing strict abstention when evidence is absent.
+        - Renders ALL top-k pages (default 5) plus 2x2 zoom tiles of the top visual page.
+        - evidence_status in {stated, derivable, absent}: abstain ONLY when absent, when the pages show a
+          different entity/time period, or when a hard proper noun / year of the question has zero
+          attestation in the whole document (text + VisionPageCards).
+        - Grounding is reported honestly: text_verified | vision_card_supported | vlm_attested.
         """
+        vsums = vision_summaries or {}
         pages = candidate_pages[:max_images]
         images_b64: list[str] = []
         rendered_pages: list[int] = []
@@ -239,69 +491,164 @@ class FactAdjudicator:
             except Exception:
                 continue
 
-        text_ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:2400]}" for p in pages)
+        zoom_page = self._pick_zoom_page(doc, question, rendered_pages, vsums) if zoom else None
+        n_tiles = 0
+        tiler = getattr(doc, "render_page_tiles_b64", None)
+        if zoom_page is not None and callable(tiler) and len(images_b64) < max_total_images:
+            try:
+                tiles = list(tiler(zoom_page, grid=2, overlap=0.1, scale=2.0))[: max_total_images - len(images_b64)]
+                images_b64.extend(tiles)
+                n_tiles = len(tiles)
+            except Exception:
+                n_tiles = 0
+
+        contract = infer_answer_contract(question)
+        text_blocks = []
+        for p in pages:
+            vs = vsums.get(p, "")
+            body = (doc.page_text(p) or "")[:2400]
+            text_blocks.append(f"[Page {p}]" + (f"\n(VisionCard) {vs[:600]}" if vs else "") + f"\n{body}")
+        text_ctx = "\n\n===\n\n".join(text_blocks)
+        legend = f"Images 1-{len(rendered_pages)} are full renders of physical pages {rendered_pages} (in this order)."
+        if n_tiles:
+            legend += (
+                f" Images {len(rendered_pages) + 1}-{len(rendered_pages) + n_tiles} are high-resolution 2x2 zoom tiles "
+                f"(top-left, top-right, bottom-left, bottom-right) of page {zoom_page} for reading small labels."
+            )
         sys_p = (
-            "You are a strict, zero-hallucination multimodal document auditor inspecting BOTH rendered "
-            "original PDF page images (charts, bar labels, legends, figures, tables) AND extracted text. "
-            "Never extrapolate, assume, or answer a question if the EXACT entity, time period, or metric "
-            "asked is missing from these pages. Return JSON only."
+            "You are a meticulous multimodal document auditor inspecting rendered PDF page images (charts, legends, "
+            "figures, tables, photos) AND extracted text. Work strictly in the JSON field order: observe, classify the "
+            "evidence, derive, reason, and ONLY THEN answer. Never invent values that are not visible. Return JSON only."
         )
         usr_p = (
-            f"Question: {question}\n\n"
-            f"Attached page images correspond in order to physical pages: {rendered_pages}.\n\n"
-            f"Extracted Page Text (may be empty for scanned/slide PDFs — inspect the images carefully!):\n{text_ctx}\n\n"
-            "Strict Verification Steps:\n"
-            "1. exact_subject_present (bool): Does the exact person, entity, region, or category asked in the question "
-            "explicitly appear on these pages?\n"
-            "2. exact_fact_visibly_supported (bool): Is the exact metric, value, relationship, or statement needed to answer "
-            "DIRECTLY shown on these pages (not merely a related topic, different year, or different group)?\n"
-            "3. supporting_detail (str): Quote the exact visible chart label, table row, or sentence on the page (empty if absent).\n"
-            "4. If EITHER exact_subject_present OR exact_fact_visibly_supported is false, set can_answer=false and answer='Not answerable'.\n"
-            "5. Otherwise give a concise exact `answer` (and pure arithmetic `formula` if calculation is needed).\n"
-            'Return JSON: {"exact_subject_present": false, "exact_fact_visibly_supported": false, '
-            '"can_answer": false, "answer": "", "formula": "", "cited_pages": [int], "supporting_detail": "", "reason": ""}'
+            f"Question: {question}\n\n{legend}\n\n"
+            f"Extracted Page Text (may be empty for scanned/slide pages - inspect the images carefully):\n{text_ctx}\n\n"
+            f"Expected answer form: {contract.describe()}.\n\n"
+            "Fill the fields in order:\n"
+            "1. observations: up to 8 exact visible labels / values / sentences relevant to the question, each with its page.\n"
+            "2. evidence_status: 'stated' if the answer is directly shown; 'derivable' if it can be computed, counted, "
+            "compared or combined from what is shown (e.g. a share from two counts, a difference of two values, a count of "
+            "visible or listed items across pages, a count from a percentage and a stated base size); 'absent' if the "
+            "specific subject or metric asked is not on these pages.\n"
+            "3. entity_time_match (bool): false if the pages only show a DIFFERENT entity, group, time period or metric "
+            "than the one asked.\n"
+            "4. derivation: the formula or the enumerated items (with pages) when derivable; '' otherwise.\n"
+            "5. formula: pure arithmetic (numbers and + - * / ( ) **) when a calculation is needed, else ''.\n"
+            "6. reasoning: <= 4 short sentences.\n"
+            "7. final_answer: in the expected form; 'Not answerable' when evidence_status is 'absent' or entity_time_match is false.\n"
+            'Return JSON: {"observations": [{"page": 0, "detail": ""}], "evidence_status": "absent", '
+            '"entity_time_match": true, "derivation": "", "formula": "", "reasoning": "", "final_answer": "", "cited_pages": [0]}'
         )
         parsed, _ = self.llm.chat_json(
-            "anchordoc_mm_qa_v2",
+            "anchordoc_mm_qa_v6",
             sys_p,
             usr_p,
-            max_tokens=800,
+            max_tokens=1400,
             images_b64=images_b64 if images_b64 else None,
         )
-        # Deterministic Absence Gate: require explicit subject & fact grounding booleans
-        subj_ok = bool(parsed.get("exact_subject_present", False))
-        fact_ok = bool(parsed.get("exact_fact_visibly_supported", False))
-        can_ans = bool(parsed.get("can_answer", False)) and subj_ok and fact_ok
-        ans = str(parsed.get("answer") or "").strip()
-        if not can_ans or ans.lower() in {"", "not answerable", "unanswerable", "n/a", "none"}:
+        parsed = parsed if isinstance(parsed, dict) else {}
+        status_ev = str(parsed.get("evidence_status") or "absent").strip().lower()
+        if status_ev not in {"stated", "derivable", "absent"}:
+            status_ev = "absent"
+        etm = parsed.get("entity_time_match", True)
+        etm = not (etm is False or str(etm).strip().lower() == "false")
+        ans = str(parsed.get("final_answer") or parsed.get("answer") or "").strip()
+        obs = parsed.get("observations") if isinstance(parsed.get("observations"), list) else []
+        obs_details = [str(o.get("detail") or "").strip() for o in obs if isinstance(o, dict) and str(o.get("detail") or "").strip()]
+
+        # Conservative deterministic attestation over the WHOLE document (text + VisionPageCards)
+        haystack = list(doc.pages) + list(vsums.values()) + obs_details
+        missing_terms = unattested_terms(question, haystack)
+        meta: dict[str, Any] = {
+            "evidence_status": status_ev,
+            "entity_time_match": etm,
+            "unattested_terms": missing_terms,
+            "rendered_pages": rendered_pages,
+            "zoom_page": zoom_page,
+            "zoom_tiles": n_tiles,
+            "answer_contract": asdict(contract),
+        }
+        gate = None
+        if status_ev == "absent":
+            gate = "MM_EVIDENCE_ABSENT"
+        elif not etm:
+            gate = "MM_ENTITY_TIME_MISMATCH"
+        elif missing_terms:
+            gate = "MM_UNATTESTED_TERMS"
+        elif ans.lower() in _NA_ANSWERS:
+            gate = "MM_MODEL_ABSTAINED"
+        if gate:
             return AuditVerdict(
                 item_id=item_id,
                 title=question[:90],
                 status="abstain",
                 answer="Not answerable",
-                reason=str(parsed.get("reason") or "Strict visual absence gate: exact subject or fact not visibly supported."),
+                reason=str(parsed.get("reasoning") or "Calibrated evidence gate: required evidence not present."),
                 cited_pages=[],
                 quote_verified=False,
-                rule_trace=f"MM_ABSENCE_GATE(subj={subj_ok},fact={fact_ok})",
+                rule_trace=f"{gate}(status={status_ev},etm={etm})",
                 facts=parsed,
+                meta=meta,
             )
 
+        cited = self._int_pages(parsed.get("cited_pages"), doc.num_pages)
+        src_pages = cited or rendered_pages[:2]
         formula = str(parsed.get("formula") or "").strip()
+        issues = check_contract(contract, ans, "")
+        repaired = False
+        if issues and allow_repair:
+            fixed = self._repair_answer(
+                "anchordoc_mm_repair", question, contract, issues,
+                {k: parsed.get(k) for k in ("observations", "derivation", "formula", "reasoning", "final_answer")},
+                "\n\n".join(f"[Page {p}]\n{vsums.get(p, '')}\n{(doc.page_text(p) or '')[:1200]}" for p in src_pages[:2]),
+            )
+            new_ans = str(fixed.get("final_answer") or "").strip()
+            if new_ans and new_ans.lower() not in _NA_ANSWERS:
+                ans, repaired = new_ans, True
+                formula = str(fixed.get("formula") or "").strip() or formula
+                issues = check_contract(contract, ans, "")
         calc_val = safe_calc(formula) if formula else None
-        if calc_val is not None:
-            ans = f"{ans} [Python-verified: {formula} = {calc_val:.4f}]"
-        cited = [int(p) for p in (parsed.get("cited_pages") or []) if isinstance(p, (int, float)) and 1 <= int(p) <= doc.num_pages]
+
+        # Honest grounding level
+        grounding, quote = "vlm_attested", (obs_details[0] if obs_details else str(parsed.get("derivation") or ""))
+        page_text_src = "\n".join(doc.page_text(p) for p in src_pages)
+        card_src = " ".join(vsums.get(p, "") for p in src_pages)
+        for d in obs_details:
+            ok, overlap = verify_quote(d, page_text_src)
+            if ok:
+                grounding, quote = "text_verified", d
+                break
+            if card_src:
+                ok_c, ov_c = verify_quote(d, card_src)
+                if (ok_c or ov_c >= 0.6) and grounding == "vlm_attested":
+                    grounding, quote = "vision_card_supported", d
+        grounded, ungrounded = (
+            operands_grounded(formula, page_text_src + " " + card_src + " " + " ".join(obs_details)) if formula else (True, [])
+        )
+        ans, comp_tag = compose_numeric_answer(
+            ans, calc_val, formula, contract, "", operand_grounded=grounded
+        )
+        meta.update({
+            "grounding": grounding,
+            "contract_issues": issues,
+            "repaired": repaired,
+            "composition": comp_tag,
+            "operand_grounded": grounded,
+            "ungrounded_operands": ungrounded,
+        })
+        base_rule = "MM_VISION_" + status_ev.upper() if images_b64 else "MM_TEXT_" + status_ev.upper()
         return AuditVerdict(
             item_id=item_id,
             title=question[:90],
             status="answered",
             answer=ans,
-            reason=str(parsed.get("reason") or ""),
-            cited_pages=cited or rendered_pages[:2],
-            verbatim_quote=str(parsed.get("supporting_detail") or "")[:240],
-            quote_verified=True,
-            rule_trace="MM_VISION_VERIFIED" if images_b64 else "MM_TEXT_ONLY",
+            reason=str(parsed.get("reasoning") or ""),
+            cited_pages=src_pages,
+            verbatim_quote=quote[:240],
+            quote_verified=grounding == "text_verified",
+            rule_trace=f"{base_rule}|{grounding.upper()}|{comp_tag}",
             formula=formula,
             calc_value=calc_val,
             facts=parsed,
+            meta=meta,
         )

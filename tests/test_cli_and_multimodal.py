@@ -29,6 +29,22 @@ class MockMultimodalLLM:
             return {"selected_pages": [2], "complete": True, "missing_terms": []}, "{}"
         if purpose == "anchordoc_rerank":
             return {"ranked_pages": [2]}, "{}"
+        if purpose == "anchordoc_locate":
+            return {"ranked_pages": [2], "sufficient": True, "missing_terms": []}, "{}"
+        if purpose == "anchordoc_mm_qa_v6":
+            if "missing_topic" in user:
+                return {"observations": [], "evidence_status": "absent", "entity_time_match": True,
+                        "final_answer": "Not answerable", "cited_pages": []}, "{}"
+            return {
+                "observations": [{"page": 2, "detail": "2025 North America 42%"}],
+                "evidence_status": "stated",
+                "entity_time_match": True,
+                "derivation": "",
+                "formula": "42 / 100 * 100",
+                "reasoning": "Read directly from bar chart on page 2.",
+                "final_answer": "42%",
+                "cited_pages": [2],
+            }, "{}"
         if purpose in {"anchordoc_mm_qa", "anchordoc_mm_qa_v2"}:
             if "missing_topic" in user:
                 return {
@@ -81,6 +97,8 @@ def test_multimodal_adapter_answered_and_unanswerable(tmp_path):
     assert v_ok.status == "answered"
     assert v_ok.calc_value == 42.0
     assert v_ok.cited_pages == [2]
+    assert v_ok.retrieval_trace["layers"]["locate_ranked"] == [2]
+    assert v_ok.meta["evidence_status"] == "stated"
 
     v_unans = adapter.query("What is missing_topic revenue?")
     assert v_unans.status == "abstain"

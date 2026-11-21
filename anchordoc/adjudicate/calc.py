@@ -45,19 +45,62 @@ _UNIT_HOURS = {
 _COUNT_UNITS = frozenset({"count", "unit", "units", "item", "items", "台", "套", "件", "个", "名", "人", "份"})
 
 
+_MAX_EXPR_CHARS = 600
+_MAX_POW_EXPONENT = 100.0
+_MAX_POW_BASE = 1e12
+_NUM_LIT_RE = re.compile(r"\d+(?:\.\d+)?%?|\.\d+%?")
+
+
+def normalize_expression(expr: str) -> str:
+    """Normalize an LLM-written arithmetic expression into a strict ASCII form.
+
+    - Unicode minus / dashes / multiplication / division signs -> ASCII operators
+    - ``^`` -> ``**`` (bounded power, e.g. CAGR = (end/start) ** (1/n) - 1)
+    - Thousands separators and currency symbols are removed
+    - Percent literals: when EVERY numeric literal is a percent (pure percentage-point
+      arithmetic such as ``65% - 53%``) the ``%`` sign is dropped; otherwise ``N%`` becomes
+      ``(N/100)`` so mixed expressions like ``12.5% * 400`` keep their true meaning.
+    """
+    s = (expr or "").strip()
+    for a, b in (("\u2212", "-"), ("\u2013", "-"), ("\u2014", "-"), ("\u00d7", "*"), ("\u00f7", "/"), ("^", "**")):
+        s = s.replace(a, b)
+    s = re.sub(r"(?<=\d),(?=\d{3}\b)", "", s)
+    s = s.replace(",", "").replace("$", "").replace("¥", "").replace("€", "").replace("£", "")
+    lits = _NUM_LIT_RE.findall(s)
+    if lits and "%" in s:
+        if all(x.endswith("%") for x in lits):
+            s = s.replace("%", "")
+        else:
+            s = re.sub(r"(\d+(?:\.\d+)?|\.\d+)%", r"(\1/100)", s)
+    return s
+
+
 def safe_calc(expr: str) -> float | None:
-    """Safely evaluate a pure arithmetic expression via Python AST (no eval/exec)."""
-    s = (expr or "").strip().replace(",", "").replace("$", "").replace("¥", "").replace("%", "")
-    if not s or len(s) > 160 or not re.fullmatch(r"[\d.+\-*/()\s]+", s):
+    """Safely evaluate a pure arithmetic expression via Python AST (no eval/exec).
+
+    Supports + - * / unary signs and a bounded ``**`` (needed for growth rates / CAGR).
+    Returns None for anything else (names, calls, attribute access, huge powers, complex results).
+    """
+    s = normalize_expression(expr)
+    if not s or len(s) > _MAX_EXPR_CHARS or not re.fullmatch(r"[\d.+\-*/()\s]+", s):
         return None
     try:
         node = ast.parse(s, mode="eval").body
 
         def _eval(n: ast.AST) -> float:
-            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
                 return float(n.value)
             if isinstance(n, ast.UnaryOp) and type(n.op) in _OPS:
                 return _OPS[type(n.op)](_eval(n.operand))
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Pow):
+                base, exp = _eval(n.left), _eval(n.right)
+                if abs(exp) > _MAX_POW_EXPONENT or abs(base) > _MAX_POW_BASE:
+                    raise ValueError("power out of bounds")
+                if base < 0 and not float(exp).is_integer():
+                    raise ValueError("complex result")
+                if base == 0 and exp < 0:
+                    raise ZeroDivisionError("zero to negative power")
+                return float(base**exp)
             if isinstance(n, ast.BinOp) and type(n.op) in _OPS:
                 rhs = _eval(n.right)
                 if isinstance(n.op, ast.Div) and abs(rhs) < 1e-12:

@@ -8,7 +8,6 @@ from ..docbase.pdf_loader import PdfDocument
 from ..runtime.text import BM25Okapi, rrf, tokenize
 from ..types import PageCard
 
-_TOC_DOTS = re.compile(r"\.{4,}\s*\d+")
 _HEADING_RE = re.compile(
     r"^(?:ITEM\s+\d+[A-Z]?\.?|PART\s+[IVX]+|NOTE\s+\d+|SECTION\s+\d+|CHAPTER\s+\d+|"
     r"第[一二三四五六七八九十百\d]+[章节条款]|\d+(?:\.\d+){0,3}\.?|[A-Z][A-Z\s,&/-]{5,60})$"
@@ -33,21 +32,138 @@ _NOTE_RE = re.compile(
 )
 _YEAR_RE = re.compile(r"\b20(?:1[5-9]|2[0-9])\b")
 
+# --- Printed-TOC signals -------------------------------------------------------------------
+# A real TOC is a list of entries that END in a page number, and those page numbers grow
+# monotonically down the page. Keyword counts ("Section 12(b)", "Item 405") are NOT a TOC
+# signal: a 10-K cover page is full of them, which is exactly how v0.5 misclassified p1.
+_LONE_NUM_RE = re.compile(r"^\d{1,3}$")
+_NAV_LINK_LINES = frozenset({"table of contents", "contents", "back to contents", "return to table of contents"})
+_DOT_LEADER_RE = re.compile(r"(?:(?:\.\s?){3,}|…{2,}|·{3,})\s*\d{1,3}\s*$")
+_TRAIL_NUM_RE = re.compile(r"(?:\s|\.{2,}|…+|·+)(\d{1,3})\s*$")
+
+# --- Printed page number in header/footer ----------------------------------------------------
+_FOOTER_NUM_RES = (
+    re.compile(r"^(?:page|p\.|pg\.?|slide)?\s*[-–—]?\s*(\d{1,3})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I),
+    re.compile(r"^.{2,80}?\s*[|•·]\s*(\d{1,3})$"),
+    re.compile(r"^(\d{1,3})\s*[|•·]\s*.{2,80}$"),
+    re.compile(r"^第\s*(\d{1,3})\s*页(?:\s*[/共]\s*\d{1,4}\s*页?)?$"),
+)
+
+# --- Page-reference parsing in user queries ---------------------------------------------------
+_NUM_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+_ORDINAL_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+    "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12, "thirteenth": 13,
+    "fourteenth": 14, "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+    "nineteenth": 19, "twentieth": 20,
+}
+_PG = r"(?:pages?|slides?)"
+_REF_NUM_RE = re.compile(
+    r"(?:\b(?:pages?|slides?|pg\.?)|(?<![A-Za-z])pp?\.)\s*(?:no\.?\s*|number\s*|#\s*)?(\d{1,4})"
+    r"(?:\s*(?:-|–|to|and|&|,|through)\s*(\d{1,4}))?",
+    re.I,
+)
+_REF_WORD_RE = re.compile(r"\b" + _PG + r"\s+(" + "|".join(_NUM_WORDS) + r")\b", re.I)
+_REF_ORD_NUM_RE = re.compile(r"\b(\d{1,3})(?:st|nd|rd|th)\s+" + _PG + r"\b", re.I)
+_REF_ORD_WORD_RE = re.compile(r"\b(" + "|".join(_ORDINAL_WORDS) + r")\s+" + _PG + r"\b", re.I)
+_REF_LAST_RE = re.compile(r"\b(?:last|final|closing|back)\s+" + _PG + r"\b", re.I)
+_REF_PENULT_RE = re.compile(r"\b(?:penultimate|second[\s-]+(?:to|from)[\s-]+(?:the[\s-]+)?last)\s+" + _PG + r"\b", re.I)
+_REF_COVER_RE = re.compile(r"\b(?:cover|front|title)\s+" + _PG + r"\b", re.I)
+_REF_CJK_RE = re.compile(r"第\s*(\d{1,4})\s*[页頁]")
+
+_NUM_TOKEN_RE = re.compile(r"[$¥€(]?-?\d[\d,.]*%?\)?")
+_CONTINUED_RE = re.compile(r"\(?\b(?:continued|cont'd|cont\.)\)?|续表|（续）|\(续\)", re.I)
+
+
+def _is_numeric_dense(line: str, min_nums: int = 2) -> bool:
+    return len(_NUM_TOKEN_RE.findall(line)) >= min_nums
+
+
+def _toc_signals(text: str) -> tuple[int, int, list[int]]:
+    """Return (dot_leader_lines, entry_lines, trailing_page_refs) for printed-TOC detection.
+
+    An entry "has a page ref" when it ends with a 1-3 digit number (after whitespace or dot
+    leaders), or when the NEXT line is a lone number (common in PDF text extraction where the
+    page column is emitted as its own line).
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    dots = sum(1 for ln in lines if _DOT_LEADER_RE.search(ln))
+    entries = 0
+    refs: list[int] = []
+    for i, ln in enumerate(lines):
+        if _LONE_NUM_RE.fullmatch(ln):
+            continue
+        entries += 1
+        # Dot leaders inflate line length; measure the line with leader runs collapsed.
+        if len(re.sub(r"(?:\.\s?){3,}|…+|·{3,}", " ", ln)) > 120 or _is_table_row(ln):
+            continue  # prose paragraphs and numeric table rows are not TOC entries
+        m = _TRAIL_NUM_RE.search(ln)
+        if m:
+            refs.append(int(m.group(1)))
+        elif i + 1 < len(lines) and _LONE_NUM_RE.fullmatch(lines[i + 1]):
+            refs.append(int(lines[i + 1]))
+    return dots, entries, refs
+
+
+_LEAD_NUMBERING_RE = re.compile(
+    r"^(?:(?:item|note|part|section|chapter|article|schedule|exhibit|appendix)\s+)?"
+    r"\d+(?:\.\d+)*[A-Z]?[.):]?\s+",
+    re.I,
+)
+_STANDALONE_NUM_RE = re.compile(r"^[$¥€(]?-?\d[\d,.]*%?\)?$")
+
+
+def _is_table_row(line: str) -> bool:
+    """True when a line carries >= 2 standalone numbers besides its leading section numbering.
+
+    TOC entries are "<numbering> <title> <page>"; table rows are "<label> <value> <value>".
+    """
+    toks = _LEAD_NUMBERING_RE.sub("", line.strip()).split()
+    return sum(1 for t in toks if _STANDALONE_NUM_RE.match(t)) >= 2
+
+
+def _mostly_non_decreasing(nums: list[int], min_ratio: float = 0.7) -> bool:
+    if len(nums) < 2:
+        return False
+    ok = sum(1 for a, b in zip(nums, nums[1:]) if b >= a)
+    return ok / (len(nums) - 1) >= min_ratio
+
+
+def looks_like_printed_toc(text: str, max_page: int | None = None) -> bool:
+    """Generic printed-TOC detector.
+
+    Requires (a) >= 3 dot-leader lines, OR (b) >= 45% of entry lines ending in a page number,
+    OR (c) a separately extracted page-number column (a block of >= 6 lone numbers covering
+    >= 45% of the entries). In every case the page numbers must be mostly non-decreasing (a TOC
+    lists sections in document order; a financial table's numbers do not grow monotonically)
+    and, when ``max_page`` is known, must not point past the end of the document.
+    """
+    dots, entries, refs = _toc_signals(text)
+
+    def plausible(nums: list[int]) -> bool:
+        if not _mostly_non_decreasing(nums):
+            return False
+        if max_page is None:
+            return True
+        return sum(1 for v in nums if v <= max_page + 5) >= 0.9 * len(nums)
+
+    if dots >= 3 and plausible(refs):
+        return True
+    if entries >= 5 and len(refs) >= 4 and len(refs) / entries >= 0.45 and plausible(refs):
+        return True
+    lone = [int(ln.strip()) for ln in (text or "").splitlines() if _LONE_NUM_RE.fullmatch(ln.strip())]
+    return len(lone) >= 6 and entries >= 6 and len(lone) / entries >= 0.45 and plausible(lone)
+
 
 def is_toc_like(text: str, page_num: int) -> bool:
-    """Heuristic TOC-page detector to prevent index pages from crowding evidence retrieval."""
+    """Heuristic TOC-page detector (only the opening pages can be a printed TOC)."""
     if page_num > 12:
         return False
-    low = (text or "").lower()
-    if ("table of contents" in low or "目 录" in text or "目录" in text[:120]) and len(_TOC_DOTS.findall(text)) >= 3:
-        return True
-    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    if not lines:
-        return False
-    page_end = sum(1 for ln in lines if re.search(r"\s+\d{1,3}$", ln) and len(ln) < 110)
-    if len(lines) >= 10 and page_end / len(lines) >= 0.45:
-        return True
-    return len(_TOC_DOTS.findall(text)) >= 6
+    return looks_like_printed_toc(text or "")
 
 
 class DocumentIndex:
@@ -96,6 +212,9 @@ class DocumentIndex:
             if pno in sec_by_page:
                 cur_sec = sec_by_page[pno]
             lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+            # Many filings repeat a "Table of Contents" back-link (and a page number) on every page;
+            # those must not become the page heading.
+            lines = [ln for ln in lines if ln.lower() not in _NAV_LINK_LINES and not _LONE_NUM_RE.fullmatch(ln)] or lines
             heading = ""
             for ln in lines[:8]:
                 if 3 <= len(ln) <= 95 and (_HEADING_RE.match(ln) or _TABLE_CUE_RE.search(ln)):
@@ -124,18 +243,180 @@ class DocumentIndex:
         return cards
 
     def find_printed_toc_pages(self) -> list[int]:
-        """Detect printed Table-of-Contents / Index pages in the opening pages (G7 gate)."""
+        """Detect printed Table-of-Contents pages in the opening pages (G7 gate).
+
+        v0.6: keyword counts alone ("Section 12(b)", "Item 405" ...) no longer qualify a page;
+        a TOC must show dot leaders or a high ratio of entries ending in monotonic page numbers.
+        A "Contents" title lowers the bar slightly but still requires page-number evidence.
+        """
+        cached = getattr(self, "_printed_toc_cache", None)
+        if cached is not None:
+            return list(cached)
         hits: list[int] = []
         for i in range(min(8, self.n)):
             txt = self.doc.pages[i] or ""
-            low = txt.lower()
-            item_cnt = len(
-                re.findall(r"(?:\b(?:item\s+\d+[a-z]?|part\s+[ivx]+|note\s+\d+|section\s+\d+)\b|第[一二三四五六七八九十\d]+[章节])", low)
-            )
-            num_lines = len(re.findall(r"(?m)^\s*\d{1,3}\s*$", txt)) + len(re.findall(r"\.{3,}\s*\d{1,3}", txt))
-            if (item_cnt >= 4 and num_lines >= 4) or (("table of contents" in low or "目录" in txt[:120]) and item_cnt >= 3):
+            head = txt[:200].lower()
+            titled = ("contents" in head) or ("目录" in txt[:200]) or ("目 录" in txt[:200])
+            if looks_like_printed_toc(txt, max_page=self.n):
                 hits.append(i + 1)
-        return hits[:2]
+                continue
+            if titled:
+                _, entries, refs = _toc_signals(txt)
+                if len(refs) >= 3 and len(refs) / max(1, entries) >= 0.3 and _mostly_non_decreasing(refs):
+                    hits.append(i + 1)
+        self._printed_toc_cache = hits[:2]
+        return list(self._printed_toc_cache)
+
+    # ------------------------------------------------------------------------------------
+    # Printed page labels & explicit page references ("page 5", "slide 3", "last page")
+    # ------------------------------------------------------------------------------------
+    def _detect_footer_number(self, page: int) -> int | None:
+        lines = [ln.strip() for ln in (self.doc.pages[page - 1] or "").splitlines() if ln.strip()]
+        if not lines:
+            return None
+        # Footers are more common than headers, so check the last lines first.
+        cands = lines[-3:][::-1] + lines[:3]
+        for ln in cands:
+            if len(ln) > 90:
+                continue
+            for rx in _FOOTER_NUM_RES:
+                m = rx.match(ln)
+                if m:
+                    v = int(m.group(1))
+                    if 1 <= v <= 999:
+                        return v
+        return None
+
+    def printed_page_map(self) -> dict[int, str]:
+        """Physical page -> printed page label.
+
+        Priority: (1) the PDF /PageLabels tree (authoritative when present); (2) lone page
+        numbers in the first/last 3 lines, accepted only when their offset to the physical
+        page is consistent across several pages (one stray number in a table is not a label).
+        Pages between the first and last confirmed detection inherit the dominant offset.
+        """
+        cached = getattr(self, "_printed_map_cache", None)
+        if cached is not None:
+            return cached
+        out: dict[int, str] = {}
+        labels = getattr(self.doc, "page_labels", None) or []
+        if len(labels) == self.n:
+            out = {i + 1: lb for i, lb in enumerate(labels) if lb}
+        else:
+            det: dict[int, int] = {}
+            for p in range(1, self.n + 1):
+                v = self._detect_footer_number(p)
+                if v is not None:
+                    det[p] = v
+            if det:
+                offs: dict[int, int] = {}
+                for p, v in det.items():
+                    offs[v - p] = offs.get(v - p, 0) + 1
+                need = max(2, int(0.2 * len(det)))
+                valid = {o for o, c in offs.items() if c >= need}
+                for p, v in det.items():
+                    if (v - p) in valid:
+                        out[p] = str(v)
+                if valid:
+                    dom = max(valid, key=lambda o: offs[o])
+                    confirmed = [p for p in out if int(out[p]) - p == dom]
+                    if len(confirmed) >= 3:
+                        for p in range(min(confirmed), max(confirmed) + 1):
+                            if p not in out and p + dom >= 1:
+                                out[p] = str(p + dom)
+        self._printed_map_cache = out
+        return out
+
+    def resolve_page_refs(self, query: str, max_pages: int = 8) -> list[int]:
+        """Map explicit page references in a query to candidate PHYSICAL pages.
+
+        Handles "page N", "pages N-M", "slide N", "p. N", "pp. N", "page two", "2nd page",
+        "second slide", "last page", "penultimate page", "cover page", "第N页". For every
+        number N both the physical page N and every page whose printed label is N are returned,
+        because users quote whatever number they see printed on the page.
+        """
+        q = query or ""
+        if not q.strip() or self.n == 0:
+            return []
+        nums: list[int] = []
+        specials: list[int] = []
+        for m in _REF_NUM_RE.finditer(q):
+            a = int(m.group(1))
+            b = int(m.group(2)) if m.group(2) else None
+            if b is not None and a < b <= a + 5:
+                nums.extend(range(a, b + 1))
+            else:
+                nums.append(a)
+                if b is not None:
+                    nums.append(b)
+        for m in _REF_WORD_RE.finditer(q):
+            nums.append(_NUM_WORDS[m.group(1).lower()])
+        for m in _REF_ORD_NUM_RE.finditer(q):
+            nums.append(int(m.group(1)))
+        for m in _REF_ORD_WORD_RE.finditer(q):
+            nums.append(_ORDINAL_WORDS[m.group(1).lower()])
+        for m in _REF_CJK_RE.finditer(q):
+            nums.append(int(m.group(1)))
+        if _REF_PENULT_RE.search(q):
+            specials.append(max(1, self.n - 1))
+        elif _REF_LAST_RE.search(q):
+            specials.append(self.n)
+            # A near-empty back cover usually means the user means the last content page.
+            if self.n > 1 and len((self.doc.pages[-1] or "").strip()) < 20 and not self.vision_summaries.get(self.n):
+                specials.append(self.n - 1)
+        if _REF_COVER_RE.search(q):
+            specials.append(1)
+
+        printed = self.printed_page_map()
+        by_label: dict[str, list[int]] = {}
+        for p, lb in printed.items():
+            by_label.setdefault(lb.strip().lower(), []).append(p)
+
+        uniq = list(dict.fromkeys(nums))
+        cands = list(specials)
+        cands += [n_ for n_ in uniq if 1 <= n_ <= self.n]  # physical interpretation first
+        for n_ in uniq:  # then printed-label interpretation
+            cands += sorted(by_label.get(str(n_), []))
+        out: list[int] = []
+        for p in cands:
+            if 1 <= p <= self.n and p not in out:
+                out.append(p)
+        return out[:max_pages]
+
+    # ------------------------------------------------------------------------------------
+    # Table continuation across page breaks
+    # ------------------------------------------------------------------------------------
+    @staticmethod
+    def _is_heading_line(ln: str) -> bool:
+        if not (3 <= len(ln) <= 95) or _is_numeric_dense(ln) or re.fullmatch(r"[\d.,\s$%()\-–]+", ln):
+            return False
+        return bool(_HEADING_RE.match(ln) or _STMT_RE.search(ln) or _NOTE_RE.match(ln) or _TABLE_CUE_RE.search(ln))
+
+    def continuation_neighbors(self, page: int) -> list[int]:
+        """Adjacent pages a table on ``page`` probably continues from / into.
+
+        * p-1 when the page carries a table but opens without a heading-like line (or says
+          "continued"): the table's title and column header are likely on the previous page.
+        * p+1 when the last body lines (footer page numbers ignored) are numeric table rows:
+          the table probably runs past the page bottom.
+        """
+        if not (1 <= page <= self.n):
+            return []
+        c = self.cards[page - 1]
+        lines = [ln.strip() for ln in (self.doc.pages[page - 1] or "").splitlines() if ln.strip()]
+        # PageCard.has_table needs 3+ numbers per row; two-period statements only have 2.
+        if not (c.has_table or sum(1 for ln in lines if _is_numeric_dense(ln)) >= 4):
+            return []
+        out: list[int] = []
+        head = lines[:6]
+        continued = any(_CONTINUED_RE.search(ln) for ln in head)
+        if page > 1 and (continued or not any(self._is_heading_line(ln) for ln in head)):
+            out.append(page - 1)
+        body = [ln for ln in lines if not any(rx.match(ln) for rx in _FOOTER_NUM_RES)]
+        tail = body[-3:]
+        if page < self.n and len(tail) == 3 and sum(1 for ln in tail if _is_numeric_dense(ln)) >= 2:
+            out.append(page + 1)
+        return out
 
     def calibrate_printed_offset(self, toc_text: str) -> int:
         """Calibrate printed_page -> physical_pdf_page offset (distilled from G7)."""
@@ -218,14 +499,30 @@ class DocumentIndex:
         kept.sort(key=lambda x: x[1])
         return "\n".join(x[2] for x in kept[:max_anchors])
 
-    def rank_pagecard_rrf(self, query: str, top_k: int = 10, exclude_toc: bool = True) -> list[int]:
-        """Dual BM25 (raw page + PageCard) fused via RRF(k=60)."""
+    def rank_pagecard_rrf(
+        self, query: str, top_k: int = 10, exclude_toc: bool = True, demote_toc: bool = False
+    ) -> list[int]:
+        """Dual BM25 (raw page + PageCard) fused via RRF(k=60).
+
+        ``exclude_toc=True`` (legacy) drops TOC pages entirely. With ``exclude_toc=False`` and
+        ``demote_toc=True`` TOC pages are kept but stably pushed behind every non-TOC page.
+        """
         qt = tokenize(query)
         s_raw = self.bm_raw.get_scores(qt)
         s_card = self.bm_card.get_scores(qt)
         r_raw = [i + 1 for i in sorted(range(self.n), key=lambda i: -s_raw[i]) if not exclude_toc or (i + 1) not in self.toc_pages][:60]
         r_card = [i + 1 for i in sorted(range(self.n), key=lambda i: -s_card[i]) if not exclude_toc or (i + 1) not in self.toc_pages][:60]
-        return rrf(r_raw, r_card, k=60)[:top_k]
+        fused = rrf(r_raw, r_card, k=60)
+        if demote_toc and not exclude_toc:
+            fused = self.demote_toc(fused)
+        return fused[:top_k]
+
+    def demote_toc(self, pages: list[int], protected: Iterable[int] = ()) -> list[int]:
+        """Stable partition: non-TOC (or protected) pages first, TOC pages after them."""
+        prot = set(protected)
+        head = [p for p in pages if p not in self.toc_pages or p in prot]
+        tail = [p for p in pages if p in self.toc_pages and p not in prot]
+        return head + tail
 
     def rank_pages_subset(self, query: str, pages: Iterable[int], top_k: int = 6) -> list[int]:
         """Score a specific page subset using combined raw + PageCard BM25."""

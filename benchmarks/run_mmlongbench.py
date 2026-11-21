@@ -10,8 +10,10 @@ Compares 3 methods on the exact same multimodal model (deepseek-v4-flash, temper
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import json
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -114,7 +116,20 @@ def summarize(judges: list[dict], rows: list[dict], stats: dict) -> dict[str, An
     }
 
 
+def _pages_hit(gold: list[int], pages: list[int]) -> tuple[bool, bool]:
+    gs = set(gold)
+    return bool(gs & set(pages)), bool(gs) and gs.issubset(set(pages))
+
+
 def main() -> None:
+    ap = argparse.ArgumentParser(description="MMLongBench-Doc runner (per-item results, isolated cache/out).")
+    ap.add_argument("--cache-dir", default=os.environ.get("ANCHORDOC_BENCH_CACHE", str(ROOT / "cache/mmlongbench")))
+    ap.add_argument("--out", default=os.environ.get("ANCHORDOC_BENCH_OUT", str(ROOT / "results/mmlongbench_101_v06.json")))
+    ap.add_argument("--methods", default="chunk,text,vision", help="comma list: chunk,text,vision")
+    ap.add_argument("--workers", type=int, default=6)
+    args = ap.parse_args()
+    wanted = {m.strip() for m in args.methods.split(",") if m.strip()}
+
     t0 = time.time()
     base = ROOT / "data/mmlongbench"
     all_rows = json.load(open(base / "samples.json", encoding="utf-8"))
@@ -129,93 +144,109 @@ def main() -> None:
     tot_pages = sum(d.num_pages for d in docs.values())
     print(f"Loaded & Zero-LLM indexed {len(docs)} PDFs ({tot_pages} pages)")
 
-    llm = CachedLLM(cache_dir=ROOT / "cache/mmlongbench")
-
-    # 1. ChunkRAG-TextOnly
-    llm.reset_stats()
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        c_out = list(ex.map(lambda r: answer_chunk_text(indices[r["doc_id"]], r["question"], llm), rows))
-    c_stats = llm.snapshot_stats()
-
-    # Shared adapters WITHOUT selective vision indexing (v0.3 baseline)
-    adapters_novis = {d: MultimodalDocAdapter(docs[d], llm, auto_vision_index=False) for d in unique_docs}
-    for d in unique_docs:
-        adapters_novis[d].retriever.index = indices[d]
-
-    # 2. AnchorDoc-TextOnly
-    llm.reset_stats()
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        t_out = list(ex.map(lambda ir: adapters_novis[ir[1]["doc_id"]].query(ir[1]["question"], item_id=f"mm_{ir[0]}", top_k=5, use_vision=False), enumerate(rows)))
-    t_stats = llm.snapshot_stats()
-
-    # 3. AnchorDoc-v0.4 (Selective VisionPageCard Indexing ONLY on low-text pages + Vision QA + Absence Gate)
-    llm.reset_stats()
-    t_vidx = time.time()
-    adapters_v04 = {d: MultimodalDocAdapter(docs[d], llm, auto_vision_index=True, min_text_chars=180) for d in unique_docs}
-    vidx_sec = round(time.time() - t_vidx, 1)
-    vidx_pages = sum(a.vision_index_stats["vision_indexed_pages"] for a in adapters_v04.values())
-    print(f"Selective VisionPageCard indexed {vidx_pages}/{tot_pages} low-text pages in {vidx_sec}s (text-rich pages skipped = {tot_pages - vidx_pages})")
-
-    llm.reset_stats()
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        v_out = list(ex.map(lambda ir: adapters_v04[ir[1]["doc_id"]].query(ir[1]["question"], item_id=f"mm_{ir[0]}", top_k=5, use_vision=True), enumerate(rows)))
-    v_stats = llm.snapshot_stats()
-
-    # Evidence page Hit@5 on answerable questions (Chunk-BM25 vs v0.3 Text-Index vs v0.4 Selective-Vision-Index)
-    ans_rows = [(r, t, v) for r, t, v in zip(rows, t_out, v_out) if not is_unanswerable(r)]
-    chunk_hit5 = sum(
-        1 for r, _, _ in ans_rows
-        if set(int(x) for x in _parse_list(r["evidence_pages"])) & set(indices[r["doc_id"]].rank_chunk_bm25_pages(r["question"], top_k=5))
-    ) / len(ans_rows) * 100
-    v03_hit5 = sum(
-        1 for r, t, _ in ans_rows
-        if set(int(x) for x in _parse_list(r["evidence_pages"])) & set(t.retrieval_trace.get("pages", [])[:5])
-    ) / len(ans_rows) * 100
-    ret_hit5 = sum(
-        1 for r, _, v in ans_rows
-        if set(int(x) for x in _parse_list(r["evidence_pages"])) & set(v.retrieval_trace.get("pages", [])[:5])
-    ) / len(ans_rows) * 100
-
-    # Grade all 3 methods
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        jc = list(ex.map(lambda ro: judge_mm(ro[0]["question"], ro[0]["answer"], ro[1][0], ro[1][1], is_unanswerable(ro[0]), llm), zip(rows, c_out)))
-        jt = list(ex.map(lambda ro: judge_mm(ro[0]["question"], ro[0]["answer"], ro[1].answer, ro[1].status == "answered", is_unanswerable(ro[0]), llm), zip(rows, t_out)))
-        jv = list(ex.map(lambda ro: judge_mm(ro[0]["question"], ro[0]["answer"], ro[1].answer, ro[1].status == "answered", is_unanswerable(ro[0]), llm), zip(rows, v_out)))
-
-    res = {
+    llm = CachedLLM(cache_dir=args.cache_dir)
+    golds = [[int(x) for x in _parse_list(r["evidence_pages"])] for r in rows]
+    ans_idx = [i for i, r in enumerate(rows) if not is_unanswerable(r)]
+    res: dict[str, Any] = {
         "benchmark": f"MMLongBench-Doc ({len(rows)} official questions, {len(docs)} non-financial multimodal PDFs, {tot_pages} pages)",
         "model": llm.model,
-        "selective_vision_indexing": {
+        "retrieval_on_answerable": {},
+        "methods": {},
+        "per_item": {},
+    }
+    jobs: dict[str, tuple[list[Any], dict]] = {}
+
+    if "chunk" in wanted:
+        llm.reset_stats()
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            c_out = list(ex.map(lambda r: answer_chunk_text(indices[r["doc_id"]], r["question"], llm), rows))
+        c_stats = llm.snapshot_stats()
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            jc = list(ex.map(lambda ro: judge_mm(ro[0]["question"], ro[0]["answer"], ro[1][0], ro[1][1], is_unanswerable(ro[0]), llm), zip(rows, c_out)))
+        res["methods"]["ChunkRAG-TextOnly"] = summarize(jc, rows, c_stats)
+        chunk_hit = [_pages_hit(golds[i], indices[rows[i]["doc_id"]].rank_chunk_bm25_pages(rows[i]["question"], top_k=5))[0] for i in ans_idx]
+        res["retrieval_on_answerable"]["Chunk-BM25"] = {"hit@5": round(sum(chunk_hit) / len(ans_idx) * 100, 1)}
+
+    def _run_adapter(name: str, adapters: dict, use_vision: bool) -> None:
+        llm.reset_stats()
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            out = list(ex.map(
+                lambda ir: adapters[ir[1]["doc_id"]].query(ir[1]["question"], item_id=f"mm_{ir[0]}", top_k=5, use_vision=use_vision),
+                enumerate(rows),
+            ))
+        stats = llm.snapshot_stats()
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            js = list(ex.map(
+                lambda ro: judge_mm(ro[0]["question"], ro[0]["answer"], ro[1].answer, ro[1].status == "answered", is_unanswerable(ro[0]), llm),
+                zip(rows, out),
+            ))
+        res["methods"][name] = summarize(js, rows, stats)
+        res["methods"][name]["avg_calls"] = round(stats["calls"] / len(rows), 2)
+        h5 = [_pages_hit(golds[i], out[i].retrieval_trace.get("pages", [])[:5]) for i in ans_idx]
+        read = [_pages_hit(golds[i], (out[i].meta or {}).get("rendered_pages") or out[i].retrieval_trace.get("pages", [])[:5]) for i in ans_idx]
+        res["retrieval_on_answerable"][name] = {
+            "hit@5": round(sum(h for h, _ in h5) / len(ans_idx) * 100, 1),
+            "all_gold@5": round(sum(a for _, a in h5) / len(ans_idx) * 100, 1),
+            "hit@read_pages": round(sum(h for h, _ in read) / len(ans_idx) * 100, 1),
+            "all_gold@read_pages": round(sum(a for _, a in read) / len(ans_idx) * 100, 1),
+        }
+        res["per_item"][name] = [
+            {
+                "i": i,
+                "doc": r["doc_id"],
+                "question": r["question"],
+                "gold": r["answer"],
+                "answer_format": r.get("answer_format"),
+                "evidence_sources": r.get("evidence_sources"),
+                "unanswerable": is_unanswerable(r),
+                "visual": is_visual_only_or_mixed(r),
+                "gold_pages": golds[i],
+                "pages": v.retrieval_trace.get("pages", []),
+                "status": v.status,
+                "pred": v.answer[:400],
+                "rule_trace": v.rule_trace,
+                "correct": bool(j.get("correct")),
+                "meta": v.meta,
+            }
+            for i, (r, v, j) in enumerate(zip(rows, out, js))
+        ]
+
+    if "text" in wanted:
+        adapters_novis = {d: MultimodalDocAdapter(docs[d], llm, auto_vision_index=False) for d in unique_docs}
+        for d in unique_docs:
+            adapters_novis[d].retriever.index = indices[d]
+        _run_adapter("AnchorDoc-TextOnly", adapters_novis, use_vision=False)
+
+    if "vision" in wanted:
+        llm.reset_stats()
+        t_vidx = time.time()
+        adapters_vis = {d: MultimodalDocAdapter(docs[d], llm, auto_vision_index=True, min_text_chars=180) for d in unique_docs}
+        vidx_sec = round(time.time() - t_vidx, 1)
+        vidx_pages = sum(a.vision_index_stats["vision_indexed_pages"] for a in adapters_vis.values())
+        res["selective_vision_indexing"] = {
             "total_pages": tot_pages,
             "vision_indexed_pages": vidx_pages,
             "skipped_text_rich_pages": tot_pages - vidx_pages,
             "wall_sec": vidx_sec,
-        },
-        "retrieval_hit5_on_answerable": {
-            "Chunk-BM25": round(chunk_hit5, 1),
-            "AnchorDoc-TextIndex (v0.3)": round(v03_hit5, 1),
-            "AnchorDoc-SelectiveVision (v0.4)": round(ret_hit5, 1),
-        },
-        "methods": {
-            "ChunkRAG-TextOnly": summarize(jc, rows, c_stats),
-            "AnchorDoc-TextOnly": summarize(jt, rows, t_stats),
-            "AnchorDoc-v0.4 (SelectiveVision+AbsenceGate)": summarize(jv, rows, v_stats),
-        },
-        "elapsed_sec": round(time.time() - t0, 1),
-    }
+            "indexing_stats": llm.snapshot_stats(),
+        }
+        print(f"Selective VisionPageCard indexed {vidx_pages}/{tot_pages} low-text pages in {vidx_sec}s")
+        _run_adapter("AnchorDoc-Full (SelectiveVision+EvidenceGate)", adapters_vis, use_vision=True)
 
-    out_path = ROOT / "results/mmlongbench_101_v04.json"
+    res["elapsed_sec"] = round(time.time() - t0, 1)
+    out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"\n=== MMLongBench-Doc Retrieval Hit@5 (Answerable n={len(ans_rows)}) ===")
-    print(f"  Chunk-BM25: {chunk_hit5:.1f}%  |  v0.3 TextIndex: {v03_hit5:.1f}%  |  v0.4 SelectiveVision: {ret_hit5:.1f}%")
-    print("\n=== MMLongBench-Doc End-to-End Multimodal Results ===")
+    print(f"\n=== MMLongBench-Doc Retrieval on Answerable (n={len(ans_idx)}) ===")
+    for name, m in res["retrieval_on_answerable"].items():
+        print(f"  {name:48s} | {m}")
+    print("\n=== MMLongBench-Doc End-to-End Results ===")
     for name, m in res["methods"].items():
         print(
-            f"  {name:30s} | Overall={m['overall_acc_%']:5.1f}% | Chart/Fig={m['visual_chart_fig_acc_%']:5.1f}% | "
+            f"  {name:48s} | Overall={m['overall_acc_%']:5.1f}% | Chart/Fig={m['visual_chart_fig_acc_%']:5.1f}% | "
             f"Text/Tbl={m['text_table_acc_%']:5.1f}% | UnansAbstain={m['unanswerable_abstain_acc_%']:5.1f}% "
-            f"(Halluc={m['false_answer_on_unans_%']:4.1f}%)"
+            f"(Halluc={m['false_answer_on_unans_%']:4.1f}%) | AvgTok={int(m['avg_prompt_tokens'])}"
         )
     print(f"Saved: {out_path} ({res['elapsed_sec']}s)")
 
