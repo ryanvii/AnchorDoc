@@ -60,8 +60,10 @@ class DocumentIndex:
         self.cards: list[PageCard] = self._build_cards()
         self.toc_pages: set[int] = set(self.find_printed_toc_pages()) | {c.page for c in self.cards if c.is_toc}
 
-        # Dual BM25 indices (raw physical page + structured PageCard)
-        self.bm_raw = BM25Okapi([tokenize(p) for p in doc.pages])
+        # Dual BM25 indices (raw physical page + structured PageCard incl. Selective VisionCard)
+        self.bm_raw = BM25Okapi(
+            [tokenize((p or "") + " " + self.vision_summaries.get(i + 1, "")) for i, p in enumerate(doc.pages)]
+        )
         self.bm_card = BM25Okapi([tokenize(c.card_text()) for c in self.cards])
 
         # Flat chunk index (for baseline comparison and fine-grained excerpting)
@@ -181,11 +183,17 @@ class DocumentIndex:
             if p in toc_set:
                 continue
             txt = self.doc.pages[p - 1] or ""
+            vsum = self.vision_summaries.get(p, "")
             lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
             clean = [ln for ln in lines[:12] if ln.lower() != "table of contents" and not re.fullmatch(r"\d{1,3}", ln)]
+            if not clean and vsum:
+                anchors.append((1, p, f"p.{p}: {vsum[:150]}"))
+                continue
             if not clean:
                 continue
             head_blob = " | ".join(clean[:4])[:140]
+            if vsum:
+                head_blob = f"{head_blob} | {vsum[:90]}"[:155]
             c = self.cards[p - 1]
             tag = " [TABLE]" if c.has_table else ""
 

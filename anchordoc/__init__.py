@@ -2,19 +2,20 @@
 from .adjudicate import FactAdjudicator, compare_duration_or_count, decide_compliance, safe_calc
 from .docbase import PdfDocument, extract_docx_tables, resolve_table_rows
 from .extract import ContractExtractor
-from .index import DocumentIndex, SpanCardIndex
+from .index import DocumentIndex, SelectiveVisionIndexer, SpanCardIndex
 from .report import export_html, export_json, export_markdown
 from .retrieve import AnchorRetriever, SpanRetriever
 from .runtime import BM25Okapi, CachedLLM, rrf, tokenize, verify_quote
 from .types import AuditVerdict, ExtractedRequirement, PageCard, RetrievalTrace, SourceLine, SpanCard
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "__version__",
     "CachedLLM",
     "PdfDocument",
     "DocumentIndex",
+    "SelectiveVisionIndexer",
     "SpanCardIndex",
     "AnchorRetriever",
     "SpanRetriever",

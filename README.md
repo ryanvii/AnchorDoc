@@ -22,27 +22,29 @@
   - **Page Retrieval & Ablation**: **84.7% Hit@5 / 81.3% AllGold@5** (MRR `0.7719`) vs Chunk-BM25 **35.3% / 32.0%** (MRR `0.2613`). Ablation confirms **Zero-LLM AnchorMap + G7** alone drives **+11.4pp Hit@5** and **+18.0pp AllGold@5**.
   - **End-to-End Verifiable QA**: **78.7% overall accuracy** vs same-model ChunkRAG **33.3%** (**+45.4pp**).
   - **Numerical Financial Statements (`metrics-generated`, 50/50)**: **100.0% AllGold@5** & **90.0% End-to-End Accuracy** (ChunkRAG: 20.0%) via verbatim fact extraction + Python AST arithmetic.
+- **MMLongBench-Doc (NeurIPS 2024 — 101 official questions across 7 non-financial multimodal PDFs, 170 pages)**
+  - **Hybrid Zero-LLM + Selective `VisionPageCard`** skips 100% of text-rich digital pages and indexes only low-text/rasterized slide pages, lifting answerable **Hit@5 to 95.4% (62/65)** (vs Chunk-BM25 `44.6%`, +50.8pp).
+  - **End-to-End Multimodal Accuracy**: **52.5% overall** (vs ChunkRAG `36.6%`), **53.1%** Text/Table (vs `21.9%`), **24.2%** Chart/Figure (vs `0.0%`), and **77.8%** Unanswerable Abstain accuracy (nearly halving unanswerable hallucination via strict Absence Gate).
 - **ContractNLI-Long (150 full legal contracts >= 10k chars, balanced 50/50/50)**
   - **SpanCard + B42 Two-Step Gap-Followup + QuoteGate** Pareto-dominates full **Long-Context Direct** (`78.1%` vs `78.0%` Macro-F1, `80.3%` vs `78.5%` high-confidence accuracy, lower false-pass `14.0%` vs `16.0%`, and **25% fewer tokens**).
-- **MMLongBench-Doc (101 official questions across 7 non-financial multimodal PDFs)**
-  - **AnchorDoc-Multimodal** lifts retrieval Hit@5 to **63.1%** (vs Chunk-BM25 `44.6%`) and boosts Text/Table accuracy to **53.1%** (vs `21.9%`) and Chart/Figure accuracy to **12.1%** (vs `0.0%`).
 
 See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for full ablations and reproduction commands.
 
 ---
 
-## CLI & Interactive HTML Evidence Workbench
+## Install & CLI
 
 ```bash
+pip install -e .
+
 # 1. Inspect Zero-LLM Structural Anchor Map & G7 TOC offset (no API key required!)
-python3 -m anchordoc.cli outline annual_report_10k.pdf
+anchordoc outline annual_report_10k.pdf
 
 # 2. Ask a verifiable question & export a two-pane HTML report with embedded original PDF pages
-python3 -m anchordoc.cli query annual_report_10k.pdf \
-  "What is FY2023 gross profit margin?" --html report.html
+anchordoc query annual_report_10k.pdf "What is FY2023 gross profit margin?" --html report.html
 
-# 3. Audit a PDF against a JSON checklist (with optional multimodal --vision)
-python3 -m anchordoc.cli audit submission.pdf --checklist rules.json --html audit_report.html
+# 3. Audit a PDF against a JSON checklist (add --vision for scanned/chart PDFs)
+anchordoc audit submission.pdf --checklist examples/sample_checklist.json --html audit_report.html
 ```
 
 ---

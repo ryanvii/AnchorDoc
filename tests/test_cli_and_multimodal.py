@@ -29,17 +29,44 @@ class MockMultimodalLLM:
             return {"selected_pages": [2], "complete": True, "missing_terms": []}, "{}"
         if purpose == "anchordoc_rerank":
             return {"ranked_pages": [2]}, "{}"
-        if purpose == "anchordoc_mm_qa":
+        if purpose in {"anchordoc_mm_qa", "anchordoc_mm_qa_v2"}:
             if "missing_topic" in user:
-                return {"can_answer": False, "answer": "Not answerable", "cited_pages": [], "reason": "Not found"}, "{}"
+                return {
+                    "exact_subject_present": False,
+                    "exact_fact_visibly_supported": False,
+                    "can_answer": False,
+                    "answer": "Not answerable",
+                    "cited_pages": [],
+                    "reason": "Not found",
+                }, "{}"
             return {
+                "exact_subject_present": True,
+                "exact_fact_visibly_supported": True,
                 "can_answer": True,
                 "answer": "42%",
                 "formula": "42 / 100 * 100",
                 "cited_pages": [2],
+                "supporting_detail": "2025 North America 42%",
                 "reason": "Read directly from bar chart on page 2.",
             }, "{}"
         return {}, "{}"
+
+
+def test_selective_vision_indexer_skips_text_rich_pages(tmp_path):
+    from anchordoc.index import SelectiveVisionIndexer
+
+    fake_pdf = tmp_path / "dummy.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4")
+    doc = PdfDocument.from_pages(
+        [
+            "A" * 500,  # text-rich digital page -> skip!
+            "Short",    # low-text scanned page -> select!
+            "",         # pure image page -> select!
+        ],
+        path=fake_pdf,
+    )
+    indexer = SelectiveVisionIndexer(llm=MockMultimodalLLM(), min_text_chars=180)
+    assert indexer.select_visual_pages(doc) == [2, 3]
 
 
 def test_multimodal_adapter_answered_and_unanswerable(tmp_path):

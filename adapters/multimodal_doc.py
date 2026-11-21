@@ -1,21 +1,40 @@
-"""Thin adapter for multimodal long PDF documents (charts, figures, scans, unanswerable checks)."""
+"""Thin adapter for multimodal long PDF documents (Selective VisionPageCard + VLM verification)."""
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Any
 
 from anchordoc.adjudicate import FactAdjudicator
 from anchordoc.docbase import PdfDocument
+from anchordoc.index import SelectiveVisionIndexer
 from anchordoc.retrieve import AnchorRetriever
 from anchordoc.runtime import LLMClient
 from anchordoc.types import AuditVerdict
 
 
 class MultimodalDocAdapter:
-    """Retrieve candidate pages via AnchorDoc and verify charts/figures directly on rendered PNGs."""
+    """Hybrid Zero-LLM + Selective VisionPageCard retriever with rendered-page VLM verification.
 
-    def __init__(self, doc: PdfDocument, llm: LLMClient) -> None:
+    - Text-rich digital pages incur 0 indexing LLM calls.
+    - Low-text / rasterized / chart-only pages (< min_text_chars) automatically receive a cached
+      VisionPageCard so 100% scanned slide decks & certificates become fully searchable.
+    """
+
+    def __init__(
+        self,
+        doc: PdfDocument,
+        llm: LLMClient,
+        auto_vision_index: bool = True,
+        min_text_chars: int = 180,
+    ) -> None:
         self.doc = doc
-        self.retriever = AnchorRetriever(doc, llm=llm)
+        self.llm = llm
+        self.vision_index_stats: dict[str, Any] = {"total_pages": doc.num_pages, "vision_indexed_pages": 0}
+        vision_summaries: dict[int, str] = {}
+        if auto_vision_index:
+            indexer = SelectiveVisionIndexer(llm=llm, min_text_chars=min_text_chars)
+            vision_summaries, self.vision_index_stats = indexer.index_document(doc)
+        self.retriever = AnchorRetriever(doc, llm=llm, vision_summaries=vision_summaries)
         self.adjudicator = FactAdjudicator(llm=llm)
 
     def query(

@@ -1,0 +1,23 @@
+{
+  "name": "Generic Corporate Filing & Compliance Checklist",
+  "items": [
+    {
+      "id": "FIN-01",
+      "title": "Independent Auditor Report",
+      "requirement": "The filing must include a signed Report of Independent Registered Public Accounting Firm covering the consolidated financial statements.",
+      "mandatory": true
+    },
+    {
+      "id": "FIN-02",
+      "title": "Consolidated Statements of Earnings / Operations",
+      "requirement": "Must disclose annual total revenue, cost of goods sold or operating expenses, and net income for the latest fiscal year.",
+      "mandatory": true
+    },
+    {
+      "id": "FIN-03",
+      "title": "Risk Factors Disclosure",
+      "requirement": "Must disclose material business, supply chain, cybersecurity, or macroeconomic risk factors under Item 1A.",
+      "mandatory": true
+    }
+  ]
+}

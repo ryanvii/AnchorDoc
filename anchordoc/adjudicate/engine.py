@@ -241,29 +241,37 @@ class FactAdjudicator:
 
         text_ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:2400]}" for p in pages)
         sys_p = (
-            "You are a strict multimodal document auditor inspecting BOTH rendered original PDF page images "
-            "(for charts, graphs, figures, visual layouts, and scanned tables) AND extracted text. "
-            "Never guess or extrapolate facts not visibly present on these pages. Return JSON only."
+            "You are a strict, zero-hallucination multimodal document auditor inspecting BOTH rendered "
+            "original PDF page images (charts, bar labels, legends, figures, tables) AND extracted text. "
+            "Never extrapolate, assume, or answer a question if the EXACT entity, time period, or metric "
+            "asked is missing from these pages. Return JSON only."
         )
         usr_p = (
             f"Question: {question}\n\n"
             f"Attached page images correspond in order to physical pages: {rendered_pages}.\n\n"
-            f"Extracted Page Text (may omit chart/figure values — always check the images!):\n{text_ctx}\n\n"
-            "Instructions:\n"
-            "1. Inspect every attached page image carefully (charts, bar labels, legends, figures, tables).\n"
-            "2. If the question asks about something NOT mentioned or NOT supported by these pages, "
-            "you MUST set `can_answer=false` and `answer='Not answerable'`.\n"
-            "3. Otherwise provide a concise, exact `answer` (if math is needed, provide `formula` for Python calc).\n"
-            'Return JSON: {"can_answer": true/false, "answer": "", "formula": "", "cited_pages": [int], "reason": ""}'
+            f"Extracted Page Text (may be empty for scanned/slide PDFs — inspect the images carefully!):\n{text_ctx}\n\n"
+            "Strict Verification Steps:\n"
+            "1. exact_subject_present (bool): Does the exact person, entity, region, or category asked in the question "
+            "explicitly appear on these pages?\n"
+            "2. exact_fact_visibly_supported (bool): Is the exact metric, value, relationship, or statement needed to answer "
+            "DIRECTLY shown on these pages (not merely a related topic, different year, or different group)?\n"
+            "3. supporting_detail (str): Quote the exact visible chart label, table row, or sentence on the page (empty if absent).\n"
+            "4. If EITHER exact_subject_present OR exact_fact_visibly_supported is false, set can_answer=false and answer='Not answerable'.\n"
+            "5. Otherwise give a concise exact `answer` (and pure arithmetic `formula` if calculation is needed).\n"
+            'Return JSON: {"exact_subject_present": false, "exact_fact_visibly_supported": false, '
+            '"can_answer": false, "answer": "", "formula": "", "cited_pages": [int], "supporting_detail": "", "reason": ""}'
         )
         parsed, _ = self.llm.chat_json(
-            "anchordoc_mm_qa",
+            "anchordoc_mm_qa_v2",
             sys_p,
             usr_p,
-            max_tokens=700,
+            max_tokens=800,
             images_b64=images_b64 if images_b64 else None,
         )
-        can_ans = bool(parsed.get("can_answer", False))
+        # Deterministic Absence Gate: require explicit subject & fact grounding booleans
+        subj_ok = bool(parsed.get("exact_subject_present", False))
+        fact_ok = bool(parsed.get("exact_fact_visibly_supported", False))
+        can_ans = bool(parsed.get("can_answer", False)) and subj_ok and fact_ok
         ans = str(parsed.get("answer") or "").strip()
         if not can_ans or ans.lower() in {"", "not answerable", "unanswerable", "n/a", "none"}:
             return AuditVerdict(
@@ -271,10 +279,10 @@ class FactAdjudicator:
                 title=question[:90],
                 status="abstain",
                 answer="Not answerable",
-                reason=str(parsed.get("reason") or "Evidence not present in retrieved pages."),
+                reason=str(parsed.get("reason") or "Strict visual absence gate: exact subject or fact not visibly supported."),
                 cited_pages=[],
                 quote_verified=False,
-                rule_trace="MM_ABSTAIN_UNANSWERABLE",
+                rule_trace=f"MM_ABSENCE_GATE(subj={subj_ok},fact={fact_ok})",
                 facts=parsed,
             )
 
@@ -290,6 +298,7 @@ class FactAdjudicator:
             answer=ans,
             reason=str(parsed.get("reason") or ""),
             cited_pages=cited or rendered_pages[:2],
+            verbatim_quote=str(parsed.get("supporting_detail") or "")[:240],
             quote_verified=True,
             rule_trace="MM_VISION_VERIFIED" if images_b64 else "MM_TEXT_ONLY",
             formula=formula,

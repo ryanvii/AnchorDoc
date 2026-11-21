@@ -34,9 +34,13 @@ class AnchorRetriever:
         blocks = []
         for p in pages:
             c = self.index.cards[p - 1]
+            raw = (self.doc.page_text(p) or "").strip()
+            vsum = self.index.vision_summaries.get(p, "")
+            body = raw[:char_limit]
+            if vsum:
+                body = f"{vsum}\n{body}".strip()[:char_limit]
             blocks.append(
-                f"[Page {p}] Section: {c.section_path or 'N/A'} | Heading: {c.heading}\n"
-                f"{self.doc.page_text(p)[:char_limit]}"
+                f"[Page {p}] Section: {c.section_path or 'N/A'} | Heading: {c.heading}\n{body}"
             )
         return "\n\n---\n\n".join(blocks)
 
