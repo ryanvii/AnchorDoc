@@ -9,6 +9,9 @@ from pathlib import Path
 
 from ..types import SourceLine
 
+# PDFium C++ library is not thread-safe across concurrent document loads
+_PDFIUM_LOCK = threading.Lock()
+
 
 @dataclass
 class PdfDocument:
@@ -52,17 +55,21 @@ class PdfDocument:
 
         import pypdfium2 as pdfium
 
-        pdf = pdfium.PdfDocument(str(p))
-        pages: list[str] = []
-        try:
-            for i in range(len(pdf)):
-                page = pdf[i]
-                tp = page.get_textpage()
-                pages.append(tp.get_text_bounded() or "")
-                tp.close()
-                page.close()
-        finally:
-            pdf.close()
+        with _PDFIUM_LOCK:
+            pdf = pdfium.PdfDocument(str(p))
+            pages: list[str] = []
+            try:
+                for i in range(len(pdf)):
+                    try:
+                        page = pdf[i]
+                        tp = page.get_textpage()
+                        pages.append(tp.get_text_bounded() or "")
+                        tp.close()
+                        page.close()
+                    except Exception:
+                        pages.append("")
+            finally:
+                pdf.close()
         return cls(path=p, pages=pages, toc_bookmarks=[], backend="pypdfium2")
 
     def render_page_png_b64(self, page_num: int, scale: float = 1.5) -> str:

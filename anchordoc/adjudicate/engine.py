@@ -80,13 +80,16 @@ class FactAdjudicator:
             f"Question: {question}\n\n"
             f"Retrieved Pages:\n{ctx}\n\n"
             "Instructions:\n"
-            "1. Extract raw facts/numbers with their physical page number and verbatim_quote.\n"
-            "2. If arithmetic is needed, set `formula` to a pure math expression using ONLY numbers and +-*/().\n"
-            "3. Set `can_answer=false` ONLY when primary evidence is genuinely absent from these pages.\n"
-            'Return JSON: {"can_answer": true/false, "verbatim_quote": "", "formula": "", "unit": "", '
-            '"answer": "", "cited_pages": [int], "reason": ""}'
+            "1. Answer concisely and directly based ONLY on these pages (if the question asks whether a metric "
+            "is useful or explicitly reported, inspect the financial statement and answer directly).\n"
+            "2. If arithmetic is needed, set `formula` to a pure math expression using ONLY numbers and +-*/() "
+            "(Python will compute the exact value).\n"
+            "3. Set `can_answer=false` ONLY when the primary evidence needed to answer is genuinely absent.\n"
+            "4. Keep `verbatim_quote` concise (<= 220 chars) and `reason` brief (1-2 sentences).\n"
+            'Return JSON: {"can_answer": true/false, "answer": "", "formula": "", "unit": "", '
+            '"cited_pages": [int], "verbatim_quote": "", "reason": ""}'
         )
-        parsed, _ = self.llm.chat_json("anchordoc_num_qa", sys_p, usr_p, max_tokens=420)
+        parsed, _ = self.llm.chat_json("anchordoc_num_qa", sys_p, usr_p, max_tokens=1100)
         can_ans = bool(parsed.get("can_answer", True))
         formula = str(parsed.get("formula") or "").strip()
         calc_val = safe_calc(formula) if formula else None

@@ -15,13 +15,17 @@
 | Full-Book Tree RAG (e.g. PageIndex) | High (dozens–hundreds of LLM calls) | Strong navigation | High upfront indexing latency/cost |
 | **AnchorDoc** | **Zero LLM calls (~50ms)** | **AnchorMap + Printed-TOC G7 + OOXML Grid** | **Quote Gate + Python Calc + Conservative Abstain** |
 
-### Verified Pilot Benchmarks (Same Model: `deepseek-v4-flash`, `temperature=0`)
+### Verified Public Benchmarks (Same Model: `deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`)
 
-- **FinanceBench (20 real SEC 10-K PDFs, 3,499 pages, 64 official questions — Dev-8 + Blind-12)**
-  - Page Retrieval: **86.0% Hit@5 / 82.8% AllGold@5** (**92.0% / 88.0% on Blind-12 unseen filings**) vs Chunk-BM25 **21.9% / 18.7%** (~4x) — with **0 indexing LLM calls**.
-  - Numerical Statement Subset (`metrics-generated`): **100.0% AllGold@5** & **92.3% End-to-End Accuracy** (ChunkRAG: 23.1%) via verbatim extraction + deterministic Python arithmetic.
-- **ContractNLI-Long (150 full legal contracts >= 10k chars — Dev-60 + Blind-90)**
-  - Structure-aware SpanCard + Two-Step Gap-Followup achieves **81.3% Accuracy / 81.2% Macro-F1**, outperforming full **Long-Context Direct (77.3% / 76.9%)** while using **26% fewer tokens**.
+- **FinanceBench — Full Official 150 / 150 Suite (84 real SEC PDFs, 12,013 pages)**
+  - **Indexing**: **26.7s total (`0.32s/PDF`), `0` LLM calls**.
+  - **Page Retrieval**: **84.7% Hit@5 / 81.3% AllGold@5** (MRR `0.7719`) vs Chunk-BM25 **35.3% / 32.0%** (MRR `0.2613`).
+  - **End-to-End Verifiable QA**: **78.7% overall accuracy** vs same-model ChunkRAG **33.3%** (**+45.4pp**).
+  - **Numerical Financial Statements (`metrics-generated`, 50/50)**: **100.0% AllGold@5** & **90.0% End-to-End Accuracy** (ChunkRAG: 20.0%) via verbatim fact extraction + Python AST arithmetic.
+- **ContractNLI-Long (150 full legal contracts >= 10k chars, balanced 50/50/50)**
+  - **SpanCard + B42 Two-Step Gap-Followup + QuoteGate** Pareto-dominates full **Long-Context Direct** (`78.1%` vs `78.0%` Macro-F1, `80.3%` vs `78.5%` high-confidence accuracy, lower false-pass `14.0%` vs `16.0%`, and **25% fewer tokens**).
+
+See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for full breakdowns and reproduction commands.
 
 ---
 
