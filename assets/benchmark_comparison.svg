@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="960" height="360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <rect width="960" height="360" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <text x="28" y="34" font-size="16.5" font-weight="700" fill="#0f172a">AnchorDoc v0.5 — Public Benchmark Comparison (Same Model: deepseek-v4-flash, temp=0)</text>
+  <text x="28" y="54" font-size="12" fill="#64748b">Apache-2.0 pypdfium2 · 0 Indexing LLM Calls on 12,013 SEC Pages (0.32s/PDF) · Selective VisionPageCard on Scanned PDFs</text>
+
+  <!-- Left Panel: FinanceBench 150/150 E2E & Retrieval -->
+  <rect x="24" y="72" width="446" height="264" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="40" y="96" font-size="13" font-weight="700" fill="#0f172a">FinanceBench Full 150 / 150 (84 SEC PDFs, 12,013p)</text>
+
+  <!-- Bars: Retrieval AllGold@5 & E2E Acc -->
+  <text x="40" y="128" font-size="11.5" fill="#334155">Chunk-BM25</text>
+  <rect x="172" y="114" width="84" height="11" rx="3" fill="#94a3b8"/>
+  <text x="262" y="123" font-size="10.5" fill="#475569">AllGold@5: 32.0%</text>
+  <rect x="172" y="128" width="88" height="11" rx="3" fill="#cbd5e1"/>
+  <text x="266" y="137" font-size="10.5" fill="#475569">E2E Acc: 33.3%</text>
+
+  <text x="40" y="172" font-size="11.5" fill="#334155">Dense RAG (BGE)</text>
+  <text x="40" y="185" font-size="9.5" fill="#94a3b8">47.6s/PDF embed</text>
+  <rect x="172" y="158" width="129" height="11" rx="3" fill="#64748b"/>
+  <text x="307" y="167" font-size="10.5" fill="#475569">AllGold@5: 48.7%</text>
+  <rect x="172" y="172" width="104" height="11" rx="3" fill="#94a3b8"/>
+  <text x="282" y="181" font-size="10.5" fill="#475569">E2E Acc: 39.3%</text>
+
+  <text x="40" y="218" font-size="11.5" font-weight="700" fill="#1d4ed8">AnchorDoc v0.5</text>
+  <text x="40" y="231" font-size="9.5" fill="#2563eb">0.32s/PDF · 0 LLM idx</text>
+  <rect x="172" y="204" width="215" height="12" rx="3" fill="#2563eb"/>
+  <text x="393" y="214" font-size="11" font-weight="700" fill="#1d4ed8">81.3%</text>
+  <rect x="172" y="219" width="208" height="12" rx="3" fill="#16a34a"/>
+  <text x="386" y="229" font-size="11" font-weight="700" fill="#15803d">78.7%</text>
+
+  <text x="40" y="266" font-size="11.5" font-weight="700" fill="#0f172a">Numerical Subset</text>
+  <text x="40" y="279" font-size="9.5" fill="#64748b">metrics-gen (50/50)</text>
+  <rect x="172" y="252" width="265" height="12" rx="3" fill="#1d4ed8"/>
+  <text x="441" y="262" text-anchor="end" font-size="10.5" font-weight="700" fill="#ffffff">100.0% AllGold@5  </text>
+  <rect x="172" y="267" width="238" height="12" rx="3" fill="#15803d"/>
+  <text x="416" y="277" font-size="11" font-weight="700" fill="#15803d">90.0%</text>
+
+  <!-- Legend Left -->
+  <rect x="40" y="306" width="12" height="10" rx="2" fill="#2563eb"/>
+  <text x="56" y="315" font-size="10.5" fill="#475569">AllGold@5 (Multi-Page Recall)</text>
+  <rect x="230" y="306" width="12" height="10" rx="2" fill="#16a34a"/>
+  <text x="246" y="315" font-size="10.5" fill="#475569">End-to-End Accuracy</text>
+
+  <!-- Right Panel: MMLongBench-Doc & LLM-Tree Cost -->
+  <rect x="490" y="72" width="446" height="130" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="506" y="96" font-size="13" font-weight="700" fill="#0f172a">MMLongBench-Doc (101q · 3 Pure-Image Slide PDFs)</text>
+
+  <text x="506" y="124" font-size="11.5" fill="#334155">Chunk-BM25 Hit@5</text>
+  <rect x="656" y="113" width="111" height="12" rx="3" fill="#94a3b8"/>
+  <text x="773" y="123" font-size="11" fill="#475569">44.6%</text>
+
+  <text x="506" y="150" font-size="11.5" fill="#334155">v0.3 Text AnchorMap</text>
+  <rect x="656" y="139" width="158" height="12" rx="3" fill="#60a5fa"/>
+  <text x="820" y="149" font-size="11" fill="#1e40af">63.1%</text>
+
+  <text x="506" y="176" font-size="11.5" font-weight="700" fill="#1d4ed8">v0.5 SelectiveVision</text>
+  <rect x="656" y="165" width="238" height="13" rx="3" fill="#2563eb"/>
+  <text x="899" y="175" font-size="11" font-weight="700" fill="#1d4ed8">95.4%</text>
+  <text x="506" y="194" font-size="10.5" fill="#475569">E2E: 52.5% overall (vs 36.6% ChunkRAG) · Unanswerable Abstain: 77.8%</text>
+
+  <!-- Bottom Right Panel: Upfront Indexing Cost vs LLM-Tree -->
+  <rect x="490" y="214" width="446" height="122" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="506" y="238" font-size="13" font-weight="700" fill="#1e3a8a">Upfront Indexing Cost (8 SEC 10-Ks, 1,814 Pages, 39q)</text>
+  <text x="506" y="264" font-size="11.5" fill="#334155">LLM-Tree-Index (12p win): 11.4s/PDF · 19.2 calls · 33.0k tok/PDF</text>
+  <text x="506" y="282" font-size="11.5" fill="#64748b">→ Hit@5: 46.2%  |  AllGold@5: 43.6%  |  E2E Acc: 35.9%</text>
+  <text x="506" y="307" font-size="12" font-weight="700" fill="#1d4ed8">AnchorDoc v0.5 (AnchorMap): 0.13s/PDF (91×) · 0 calls · 0 tok</text>
+  <text x="506" y="324" font-size="11.5" font-weight="700" fill="#15803d">→ Hit@5: 74.4% (+28.2pp)  |  AllGold@5: 71.8%  |  E2E: 79.5%</text>
+</svg>

@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine"
+message: "If you use AnchorDoc or its benchmarks in your research or production systems, please cite it as below."
+type: software
+authors:
+  - family-names: Wu
+    given-names: HuiYang
+    email: ryanwuvii@gmail.com
+repository-code: "https://github.com/WuHuiYang/AnchorDoc"
+url: "https://github.com/WuHuiYang/AnchorDoc"
+license: Apache-2.0
+version: "0.5.0"
+date-released: "2026-11-21"
+keywords:
+  - document-ai
+  - vectorless-rag
+  - long-document
+  - compliance-auditing
+  - financebench
+  - verifiable-ai

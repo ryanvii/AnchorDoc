@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+    </marker>
+    <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#1d4ed8"/>
+    </marker>
+  </defs>
+
+  <!-- White background for clean dark/light mode GitHub rendering -->
+  <rect width="960" height="440" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- Title Banner -->
+  <text x="28" y="34" font-size="17" font-weight="700" fill="#0f172a">⚓ AnchorDoc Architecture — Zero-Index-Cost Verifiable Document Auditing Engine</text>
+  <text x="28" y="54" font-size="12" fill="#64748b">100% Apache-2.0 Core · 0 LLM Indexing Calls on Digital PDFs · Selective VisionPageCard on Scanned/Slide Pages</text>
+
+  <!-- Stage 1: DocBase -->
+  <rect x="24" y="72" width="912" height="78" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.4"/>
+  <text x="40" y="94" font-size="12.5" font-weight="700" fill="#1e3a8a">LAYER 1 · DocBase (Apache-2.0 Document Foundation)</text>
+  <rect x="40" y="103" width="276" height="36" rx="7" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="178" y="120" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">1-based PageModel (pypdfium2)</text>
+  <text x="178" y="133" text-anchor="middle" font-size="10" fill="#64748b">Thread-safe · 0.32s/PDF · PNG page renderer</text>
+  <rect x="334" y="103" width="286" height="36" rx="7" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="477" y="120" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">OOXML Merged-Cell Table Grid</text>
+  <text x="477" y="133" text-anchor="middle" font-size="10" fill="#64748b">Stdlib XML · w:vMerge + w:gridSpan inheritance</text>
+  <rect x="638" y="103" width="282" height="36" rx="7" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="779" y="120" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">Numbered Source Lines [sNNNNN]</text>
+  <text x="779" y="133" text-anchor="middle" font-size="10" fill="#64748b">Quote-anchored spans for verifiable extraction</text>
+
+  <!-- Arrows Layer 1 -> Layer 2 -->
+  <line x1="250" y1="150" x2="250" y2="174" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="710" y1="150" x2="710" y2="174" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Stage 2 Left: Hybrid Structural Index -->
+  <rect x="24" y="176" width="444" height="148" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text x="40" y="198" font-size="12.5" font-weight="700" fill="#0f172a">LAYER 2 · Hybrid Zero-LLM + Selective Vision Index</text>
+  <rect x="40" y="210" width="200" height="48" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="140" y="229" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">Zero-LLM AnchorMap</text>
+  <text x="140" y="246" text-anchor="middle" font-size="10" fill="#64748b">50ms outline · 0 LLM calls on text</text>
+  <rect x="252" y="210" width="200" height="48" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="352" y="229" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">Printed-TOC G7 Calibrator</text>
+  <text x="352" y="246" text-anchor="middle" font-size="10" fill="#64748b">Auto printed→physical page offset</text>
+  <rect x="40" y="268" width="412" height="44" rx="7" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="246" y="287" text-anchor="middle" font-size="11.5" font-weight="600" fill="#312e81">Selective VisionPageCard + Dual BM25-RRF (k=60)</text>
+  <text x="246" y="302" text-anchor="middle" font-size="10" fill="#4338ca">Skips digital text pages · Visual cards ONLY for low-text / rasterized / chart pages</text>
+
+  <!-- Stage 2 Right: Retrieval + Verifiable Adjudication -->
+  <rect x="492" y="176" width="444" height="148" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text x="508" y="198" font-size="12.5" font-weight="700" fill="#0f172a">LAYER 3 &amp; 4 · Multi-Step Retrieval &amp; Verifiable Adjudication</text>
+  <rect x="508" y="210" width="200" height="48" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="608" y="229" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">C3 + B42 Gap-Followup</text>
+  <text x="608" y="246" text-anchor="middle" font-size="10" fill="#64748b">2-step absence check · Monotonic RRF</text>
+  <rect x="720" y="210" width="200" height="48" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="820" y="229" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">Multimodal Page VLM</text>
+  <text x="820" y="246" text-anchor="middle" font-size="10" fill="#64748b">Rendered PNGs + Strict Absence Gate</text>
+  <rect x="508" y="268" width="412" height="44" rx="7" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="714" y="287" text-anchor="middle" font-size="11.5" font-weight="600" fill="#14532d">Fact-Decoupled Deterministic Adjudicator</text>
+  <text x="714" y="302" text-anchor="middle" font-size="10" fill="#166534">Programmatic QuoteGate · Python AST Calc · Unit Safety · Conservative TruthTable</text>
+
+  <!-- Bridge Left -> Right -->
+  <line x1="468" y1="250" x2="490" y2="250" stroke="#1d4ed8" stroke-width="2" marker-end="url(#arrBlue)"/>
+
+  <!-- Arrows -> Bottom Layer -->
+  <line x1="250" y1="324" x2="250" y2="348" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="710" y1="324" x2="710" y2="348" stroke="#475569" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Bottom Layer: Runtime, Adapters, Workbench -->
+  <rect x="24" y="350" width="912" height="68" rx="10" fill="#0f172a"/>
+  <text x="480" y="374" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">Thin Domain Adapters · CLI &amp; Interactive Two-Pane HTML Evidence Workbench</text>
+  <text x="480" y="395" text-anchor="middle" font-size="11" fill="#cbd5e1">finance_10k (FinanceBench) · legal_nda (ContractNLI) · multimodal_doc (MMLongBench) · procurement_demo</text>
+  <text x="480" y="410" text-anchor="middle" font-size="10.5" fill="#94a3b8">SHA256 Disk Cache &amp; Offline Replay · OpenAI / DeepSeek / Qwen / Claude / vLLM · Embedded Original-Page HTML Report</text>
+</svg>
