@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+
+# Local secrets, caches, benchmark raw data
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+local/
+cache/
+data/
+results/
+*.pdf
+*.docx
+*.doc
