@@ -53,7 +53,7 @@
 ## 60 秒快速上手
 
 ```bash
-git clone https://github.com/WuHuiYang/AnchorDoc.git
+git clone https://github.com/ryanvii/AnchorDoc.git
 cd AnchorDoc
 pip install -e .
 

@@ -55,7 +55,7 @@ See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, 
 ## 60-Second Quickstart
 
 ```bash
-git clone https://github.com/WuHuiYang/AnchorDoc.git
+git clone https://github.com/ryanvii/AnchorDoc.git
 cd AnchorDoc
 pip install -e .
 
@@ -113,7 +113,7 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   title   = {AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine},
   year    = {2026},
   version = {0.5.0},
-  url     = {https://github.com/WuHuiYang/AnchorDoc},
+  url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
 }
 ```

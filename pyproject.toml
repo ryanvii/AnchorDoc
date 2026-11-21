@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
-authors = [{ name = "WuHuiYang", email = "ryanwuvii@gmail.com" }]
+authors = [{ name = "ryanvii", email = "ryanwuvii@gmail.com" }]
 keywords = ["document-ai", "vectorless-rag", "long-document", "compliance", "auditing", "pdf", "financebench"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/WuHuiYang/AnchorDoc"
-Repository = "https://github.com/WuHuiYang/AnchorDoc"
-Issues = "https://github.com/WuHuiYang/AnchorDoc/issues"
+Homepage = "https://github.com/ryanvii/AnchorDoc"
+Repository = "https://github.com/ryanvii/AnchorDoc"
+Issues = "https://github.com/ryanvii/AnchorDoc/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
