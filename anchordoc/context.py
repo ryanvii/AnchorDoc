@@ -58,7 +58,8 @@ class DocContext:
         self.retriever = AnchorRetriever(doc, llm=None, vision_summaries=vision_summaries)
         self.index: DocumentIndex = self.retriever.index
         self.toc_pages = self.index.find_printed_toc_pages()
-        self.g7_offset = self.index.calibrate_printed_offset(self.doc.page_text(self.toc_pages[0])) if self.toc_pages else 0
+        toc_joined = "\n\n".join(self.doc.page_text(p) for p in self.toc_pages)[:4500] if self.toc_pages else ""
+        self.g7_offset = self.index.calibrate_printed_offset(toc_joined) if toc_joined else 0
         self.printed_map = self.index.printed_page_map()
         self._read_ledger: set[tuple[int, tuple[int, int] | None]] = set()
 
@@ -310,11 +311,19 @@ class DocContext:
         truncated = False
         next_cursor: dict[str, Any] | None = None
 
-        for p in req_pages:
+        budget_hit = False
+        for idx_p, p in enumerate(req_pages):
+            if budget_hit:
+                break
             ledger_key = (p, lr_key)
             if not force and ledger_key in self._read_ledger:
-                out_pages.append({"p": p, "label": self.printed_map.get(p, str(p)), "already_returned": True})
-                used_tok += 12
+                out_pages.append({
+                    "p": p,
+                    "label": self.printed_map.get(p, str(p)),
+                    "already_returned": True,
+                    "hint": "Page already returned in this session; pass force=true to re-read.",
+                })
+                used_tok += 16
                 continue
 
             lines = _page_lines(self.doc.page_text(p))
@@ -328,15 +337,26 @@ class DocContext:
             for ln_no in range(start_ln, end_ln + 1):
                 entry = f"p{p}:L{ln_no:02d} {lines[ln_no - 1]}"
                 est = estimate_tokens(entry) + 2
-                if (char_used + len(entry) > max_chars or used_tok + est > MAX_READ_TOKENS) and anchored:
+                if used_tok + est > MAX_READ_TOKENS and (anchored or out_pages):
                     page_trunc = True
                     truncated = True
-                    next_cursor = {"pages": [p], "line_range": [ln_no, len(lines)]}
+                    budget_hit = True
+                    if next_cursor is None:
+                        next_cursor = {"pages": [p] + req_pages[idx_p + 1 :], "line_range": [ln_no, len(lines)]}
+                    break
+                if char_used + len(entry) > max_chars and anchored:
+                    page_trunc = True
+                    truncated = True
+                    if next_cursor is None:
+                        next_cursor = {"pages": [p], "line_range": [ln_no, len(lines)]}
                     break
                 anchored.append(entry)
                 char_used += len(entry) + 1
                 used_tok += est
                 last_ln = ln_no
+
+            if budget_hit and not anchored:
+                break
 
             block: dict[str, Any] = {
                 "p": p,
@@ -406,9 +426,11 @@ class DocContext:
             else:
                 hp, ok_hint, ov_hint = None, bool(found_pages), (1.0 if found_pages else 0.0)
             ok = bool(found_pages) or ok_hint
-            for fp in found_pages:
-                if fp not in localized_pages:
-                    localized_pages.append(fp)
+            # Ignore generic boilerplate quotes matching >3 pages when building grounding scope
+            if 0 < len(found_pages) <= 3:
+                for fp in found_pages:
+                    if fp not in localized_pages:
+                        localized_pages.append(fp)
             quote_results.append({
                 "text": qtext[:200],
                 "verified": ok,
@@ -418,7 +440,13 @@ class DocContext:
             })
 
         valid_cited = [int(p) for p in (cited_pages or ()) if 1 <= int(p) <= self.doc.num_pages]
-        if localized_pages:
+        union_pages = list(localized_pages)
+        for cp in valid_cited:
+            if cp not in union_pages:
+                union_pages.append(cp)
+        if localized_pages and valid_cited:
+            scope_pages, scope_kind = union_pages, "quote_and_cited"
+        elif localized_pages:
             scope_pages, scope_kind = localized_pages, "quote_localized"
         elif valid_cited:
             scope_pages, scope_kind = valid_cited, "cited_pages"

@@ -119,6 +119,24 @@ def vision_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
+_CORRUPT_MARKERS = (
+    "file is not a database",
+    "database disk image is malformed",
+    "malformed",
+    "corrupt",
+    "not a database",
+)
+
+
+def _is_corruption_error(exc: Exception) -> bool:
+    """True only for genuine SQLite file corruption (never transient OperationalError like locks/EMFILE/NFS)."""
+    msg = str(exc).lower()
+    if any(m in msg for m in _CORRUPT_MARKERS):
+        return True
+    # Plain DatabaseError (not OperationalError subclass) indicates structural corruption
+    return isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
+
+
 class BundleStore:
     """Thread-safe per-document SQLite WAL store with layered fingerprint invalidation."""
 
@@ -142,36 +160,41 @@ class BundleStore:
         prefix = (doc_sha or "00")[:2]
         return self.root / prefix / f"{doc_sha}.sqlite"
 
+    def _init_conn(self, db_path: Path) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(db_path), timeout=15.0)
+        try:
+            # WAL may fail on read-only mounts or NFS; fall back gracefully without quarantining.
+            try:
+                conn.execute("PRAGMA journal_mode=WAL;")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute("PRAGMA busy_timeout=10000;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.executescript(_SCHEMA_SQL)
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
     def _open_conn(self, db_path: Path) -> sqlite3.Connection:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            conn = sqlite3.connect(str(db_path), timeout=15.0)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA busy_timeout=10000;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.executescript(_SCHEMA_SQL)
-            return conn
-        except sqlite3.DatabaseError:
+            return self._init_conn(db_path)
+        except sqlite3.DatabaseError as exc:
+            if not _is_corruption_error(exc):
+                raise
             self._quarantine_corrupt(db_path)
-            conn = sqlite3.connect(str(db_path), timeout=15.0)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA busy_timeout=10000;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.executescript(_SCHEMA_SQL)
-            return conn
+            return self._init_conn(db_path)
 
     @staticmethod
     def _quarantine_corrupt(db_path: Path) -> None:
+        """Rename a verified-corrupt main SQLite file to `.corrupt` (never deletes `-wal` blindly)."""
         corrupt = db_path.with_suffix(".sqlite.corrupt")
         try:
             if corrupt.exists():
                 corrupt.unlink()
             if db_path.exists():
                 db_path.rename(corrupt)
-            for ext in ("-wal", "-shm"):
-                side = Path(str(db_path) + ext)
-                if side.exists():
-                    side.unlink()
         except OSError:
             pass
 
@@ -200,9 +223,11 @@ class BundleStore:
                     return TextLayer(pages=pages, page_labels=labels, toc_bookmarks=bookmarks)
                 finally:
                     conn.close()
-            except sqlite3.DatabaseError:
-                self._quarantine_corrupt(db_path)
-                return None
+            except sqlite3.DatabaseError as exc:
+                if _is_corruption_error(exc):
+                    self._quarantine_corrupt(db_path)
+                    return None
+                raise
 
     def save_text(self, doc_sha: str, extractor_fp: str, layer: TextLayer, meta: dict[str, Any] | None = None) -> None:
         """Atomically persist extracted text layer, labels, bookmarks, and metadata."""
@@ -254,9 +279,11 @@ class BundleStore:
                     return {int(r[0]): str(r[1]) for r in rows if str(r[1] or "").strip()}
                 finally:
                     conn.close()
-            except sqlite3.DatabaseError:
-                self._quarantine_corrupt(db_path)
-                return {}
+            except sqlite3.DatabaseError as exc:
+                if _is_corruption_error(exc):
+                    self._quarantine_corrupt(db_path)
+                    return {}
+                raise
 
     def put_vision_card(
         self,
@@ -320,21 +347,19 @@ class BundleStore:
         }
 
     def gc(self, max_age_days: float = 30.0) -> dict[str, Any]:
-        """Remove bundle files (and corrupt backups) older than ``max_age_days``."""
+        """Remove bundle files (and corrupt backups) whose last-modified time is older than ``max_age_days``."""
         cutoff = time.time() - max_age_days * 86400.0
         removed: list[str] = []
         for pattern in ("*/*.sqlite", "*/*.sqlite.corrupt"):
             for p in list(self.root.glob(pattern)):
-                try:
-                    if p.stat().st_mtime < cutoff:
-                        p.unlink()
-                        for ext in ("-wal", "-shm"):
-                            side = Path(str(p) + ext)
-                            if side.exists():
-                                side.unlink()
-                        removed.append(p.name)
-                except OSError:
-                    continue
+                sha_key = p.name.split(".")[0]
+                with self._lock_for(sha_key):
+                    try:
+                        if p.exists() and p.stat().st_mtime < cutoff:
+                            p.unlink()
+                            removed.append(p.name)
+                    except OSError:
+                        continue
         return {"removed_count": len(removed), "removed": removed}
 
 

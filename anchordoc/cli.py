@@ -100,7 +100,9 @@ def cmd_audit(args: argparse.Namespace) -> int:
         req = str(item.get("requirement") or title)
         mandatory = bool(item.get("mandatory", True))
         trace = retriever.retrieve(f"{title} {req}", top_k=args.top_k, route=args.route)
-        v = adj.audit_compliance_item(doc, item_id, title, req, trace.pages, mandatory=mandatory)
+        v = adj.audit_compliance_item(
+            doc, item_id, title, req, trace.pages, mandatory=mandatory, route=trace.route  # type: ignore[arg-type]
+        )
         v.retrieval_trace = asdict(trace)
         verdicts.append(v)
         print(f"[{v.status.upper():12s}] {v.item_id} | {v.title} | pages={v.cited_pages} | qv={v.quote_verified}")

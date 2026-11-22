@@ -29,6 +29,12 @@ from .answer_contract import (
 from .calc import safe_calc
 
 _NA_ANSWERS = frozenset({"", "not answerable", "unanswerable", "n/a", "none", "not available", "cannot be determined"})
+
+
+def _is_na_answer(text: str) -> bool:
+    """True when an answer is empty or a standard abstention phrase (ignoring trailing punctuation)."""
+    norm = re.sub(r"[.\s!?:;\"']+$", "", (text or "").strip().lower())
+    return norm in _NA_ANSWERS
 _VISUAL_CUE_RE = re.compile(
     r"\b(?:how\s+many|count|colou?rs?|charts?|graphs?|figures?|legends?|images?|pictures?|photos?|logos?|diagrams?|"
     r"maps?|icons?|axis|bars?|pie|slides?|screenshots?|people|persons)\b",
@@ -190,9 +196,18 @@ class FactAdjudicator:
         if route == "read_all":
             localized: list[int] = []
             for qt in verified_quotes:
-                for p in localize_quote_pages(qt, doc.pages):
-                    if p not in localized:
-                        localized.append(p)
+                hits = localize_quote_pages(qt, doc.pages)
+                # Ignore non-discriminative boilerplate quotes (e.g. "in millions") hitting >3 pages
+                if 0 < len(hits) <= 3:
+                    for p in hits:
+                        if p not in localized:
+                            localized.append(p)
+            union_pages = list(localized)
+            for p in cited:
+                if p not in union_pages:
+                    union_pages.append(p)
+            if localized and cited:
+                return union_pages, "quote_and_cited"
             if localized:
                 return localized, "quote_localized"
             if cited:
@@ -251,7 +266,8 @@ class FactAdjudicator:
           whole-document fallback when verifying operands.
         """
         pages = list(candidate_pages) if route == "read_all" else candidate_pages[:5]
-        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:page_char_cap]}" for p in pages)
+        eff_cap = max(page_char_cap, 24000 // max(1, len(pages))) if route == "read_all" else page_char_cap
+        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:eff_cap]}" for p in pages)
         contract = infer_answer_contract(question)
         sys_p = (
             "You are a verifiable document auditor. Work strictly in the JSON field order given: collect evidence, "
@@ -368,10 +384,13 @@ class FactAdjudicator:
         requirement: str,
         candidate_pages: list[int],
         mandatory: bool = True,
+        *,
+        route: Route = "navigate",
     ) -> AuditVerdict:
         """Fact-decoupled compliance audit: LLM extracts structured facts -> decide_compliance() emits verdict."""
-        pages = candidate_pages[:6]
-        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:3600]}" for p in pages)
+        pages = list(candidate_pages) if route == "read_all" else candidate_pages[:6]
+        eff_cap = max(3600, 24000 // max(1, len(pages))) if route == "read_all" else 3600
+        ctx = "\n\n===\n\n".join(f"[Page {p}]\n{doc.page_text(p)[:eff_cap]}" for p in pages)
         sys_p = (
             "You are an objective compliance FACT EXTRACTOR. Rely ONLY on the provided requirement and pages. "
             "Do NOT invent extra obligations not stated in the requirement. Return JSON only."
@@ -605,8 +624,9 @@ class FactAdjudicator:
         obs = parsed.get("observations") if isinstance(parsed.get("observations"), list) else []
         obs_details = [str(o.get("detail") or "").strip() for o in obs if isinstance(o, dict) and str(o.get("detail") or "").strip()]
 
-        # Conservative deterministic attestation over the WHOLE document (text + VisionPageCards)
-        haystack = list(doc.pages) + list(vsums.values()) + obs_details
+        # Conservative deterministic attestation over the WHOLE document (text + VisionPageCards ONLY;
+        # never include unverified VLM obs_details so hallucinated terms cannot self-attest).
+        haystack = list(doc.pages) + list(vsums.values())
         missing_terms = unattested_terms(question, haystack)
         meta: dict[str, Any] = {
             "evidence_status": status_ev,
@@ -624,7 +644,7 @@ class FactAdjudicator:
             gate = "MM_ENTITY_TIME_MISMATCH"
         elif missing_terms:
             gate = "MM_UNATTESTED_TERMS"
-        elif ans.lower() in _NA_ANSWERS:
+        elif _is_na_answer(ans):
             gate = "MM_MODEL_ABSTAINED"
         if gate:
             return AuditVerdict(
@@ -656,7 +676,7 @@ class FactAdjudicator:
                 "\n\n".join(f"[Page {p}]\n{vsums.get(p, '')}\n{(doc.page_text(p) or '')[:1200]}" for p in repair_pages),
             )
             new_ans = str(fixed.get("final_answer") or "").strip()
-            if new_ans and new_ans.lower() not in _NA_ANSWERS:
+            if new_ans and not _is_na_answer(new_ans):
                 ans, repaired = new_ans, True
                 formula = str(fixed.get("formula") or "").strip() or formula
                 issues = check_contract(contract, ans, "")

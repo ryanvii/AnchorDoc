@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 
 class LLMClient(Protocol):
@@ -204,18 +204,24 @@ class CachedLLM:
                     "temperature": 0,
                     "max_tokens": max_tokens,
                 }
+                thinking_disabled_used = False
                 if self.disable_thinking:
                     try:
                         resp = self._client.chat.completions.create(
                             **kwargs,
                             extra_body={"thinking": {"type": "disabled"}},
                         )
-                    except Exception:
+                        thinking_disabled_used = True
+                    except BadRequestError:
+                        # Only strip extra_body when the provider explicitly rejects the parameter (HTTP 400);
+                        # transient timeouts / 429s must retry with the same mode instead of silently switching.
                         resp = self._client.chat.completions.create(**kwargs)
                 else:
                     resp = self._client.chat.completions.create(**kwargs)
                 dt = time.time() - t0
-                raw = (resp.choices[0].message.content or "").strip()
+                choice = resp.choices[0]
+                raw = (choice.message.content or "").strip()
+                finish_reason = str(getattr(choice, "finish_reason", "") or "")
                 parsed = extract_json(raw)
                 usage = getattr(resp, "usage", None)
                 pt = int(getattr(usage, "prompt_tokens", 0) or 0)
@@ -228,19 +234,23 @@ class CachedLLM:
                     or getattr(usage, "cached_tokens", 0)
                     or 0
                 )
-                rec = {
-                    "model": self.model,
-                    "purpose": purpose,
-                    "raw": raw,
-                    "parsed": parsed,
-                    "prompt_tokens": pt,
-                    "cached_tokens": cached_pt,
-                    "completion_tokens": ct,
-                    "latency_sec": round(dt, 3),
-                }
-                tmp = cpath.with_suffix(".tmp")
-                tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-                tmp.replace(cpath)
+                # Never poison the permanent disk cache with empty/unparseable JSON responses.
+                if parsed:
+                    rec = {
+                        "model": self.model,
+                        "purpose": purpose,
+                        "raw": raw,
+                        "parsed": parsed,
+                        "prompt_tokens": pt,
+                        "cached_tokens": cached_pt,
+                        "completion_tokens": ct,
+                        "finish_reason": finish_reason,
+                        "thinking_disabled": thinking_disabled_used,
+                        "latency_sec": round(dt, 3),
+                    }
+                    tmp = cpath.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+                    tmp.replace(cpath)
                 with self._lock:
                     self.stats["calls"] += 1
                     self.stats["real_calls"] += 1

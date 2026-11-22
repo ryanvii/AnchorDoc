@@ -100,7 +100,9 @@ All evaluations below use the **exact same base model (`deepseek-v4-flash`, `tem
 | Blind Test Split (100% Disjoint Docs) | Baseline | `AnchorDoc v0.6` (`navigate`) | **`AnchorDoc v0.7` (`route=auto`)** | Takeaway |
 |---|---|---:|---:|---|
 | **MMLongBench-Doc Blind** (10 unseen PDFs, **492 pages**, 91q incl. 52 Chart/Fig) | ChunkRAG: `30.8%` Overall · `1.9%` Chart/Fig | Hit@5 **`91.0%`** · Overall **`50.5%`** · **Chart/Fig `50.0%`** · Text/Tbl `53.3%` · Unans `50.0%` | *(locked after 1st evaluation)* | Zero overfitting on Chart/Fig (`50.0%` on 52 unseen charts across 492p!); exposed unanswerable calibration gap on 50–100p unseen PDFs |
-| **ContractNLI-Long Blind** (`subset=dev`, 34 unseen NDAs, 150q 50/50/50) | LongContext: `83.3%` Acc · `17.0%` FER · `3,261` tok | `78.0%` Acc · `77.9%` F1 · `~3.0` calls/q | **`79.3%` Acc (+1.3pp) · `79.5%` F1 (+1.6pp) · `1.77` calls/q (-41%)** | Adaptive `read_all` (92/150 items) cuts retrieval hops by 41% while improving accuracy & F1 on unseen contracts |
+| **ContractNLI-Long Blind** (`subset=dev`, 34 unseen NDAs, 150q 50/50/50) | LongContext: `83.3%` Acc · `17.0%` FER · `3,261` tok | `78.0%` Acc · `77.9%` F1 · `~3.0` calls/q | **`79.3%` Acc · `79.5%` F1 · `1.77` calls/q (-41%)** | Adaptive `read_all` (92/150 items) maintains statistical accuracy parity (within ±3.3pp SE) while cutting LLM calls by 41% |
+
+*Note: On `read_all` items, all physical pages are delivered directly to the reader (full-document coverage rather than retrieval Hit@5).*
 
 ### 4.2 `v0.7.0` Paired Dev Benchmarks & Regression Gates (`deepseek-v4-flash`, `temp=0`)
 

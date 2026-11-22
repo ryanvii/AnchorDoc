@@ -48,9 +48,9 @@
 - **MMLongBench-Doc (NeurIPS 2024 — 101 questions, 7 non-financial multimodal PDFs incl. 3 pure-image slide decks)**
   - **Selective `VisionPageCard`** skips 100% of text-rich digital pages (`78/170`) and indexes only low-text/scanned pages (`92/170`).
   - **End-to-End (`v0.7` `full_pool` + Tri-State Gate + 2×2 High-Res Zoom)**: **68.3% overall** (`+15.8pp` over `v0.5`, vs `36.6%` ChunkRAG), **54.5%** Chart/Figure (**2.25×** `v0.5`'s `24.2%`), **65.6%** Text/Table, and **83.3%** Unanswerable Abstain accuracy (hallucination cut to `16.7%`).
-  - **Unseen Blind Generalization (10 unseen PDFs, 492 pages, 91q incl. 52 Chart/Figure)**: **91.0% Hit@5**, **50.0% Chart/Figure** (vs `1.9%` ChunkRAG), **50.5% overall** (`+19.7pp` over ChunkRAG).
+  - **Unseen Blind Generalization (`v0.6.0`, 10 unseen PDFs, 492 pages, 91q incl. 52 Chart/Figure)**: **91.0% Hit@5**, **50.0% Chart/Figure** (vs `1.9%` ChunkRAG), **50.5% overall** (`+19.7pp` over ChunkRAG).
 - **ContractNLI-Long (EMNLP — 150 long legal NDAs `>= 10k` chars, balanced 50/50/50)**
-  - **Two-Stage Logic NLI + Adaptive `ReadAll` Router**: **81.3% Accuracy / 81.3% Macro-F1** (`10.0%` FER on `test-150`); on the strictly unseen held-out `dev-150` split (34 unseen contracts), `v0.7` `route=auto` improves `78.0% → 79.3%` Acc / `77.9% → 79.5%` Macro-F1 while cutting LLM calls by **41%** (`~3.0 → 1.77 calls/q`).
+  - **Two-Stage Logic NLI + Adaptive `ReadAll` Router**: **81.3% Accuracy / 81.3% Macro-F1** (`10.0%` FER on `test-150`); on the strictly unseen held-out `dev-150` split (34 unseen contracts), `v0.7` `route=auto` maintains statistical parity in accuracy (`79.3%` vs `78.0%`, Macro-F1 `79.5%` vs `77.9%`) while cutting LLM calls by **41%** (`~3.0 → 1.77 calls/q`).
 - **Persistent SQLite WAL `BundleStore` Reload Speedup**
   - Reloads all **84 SEC PDFs (12,013 pages)** in **`0.330s`** vs `22.13s` cold parse (**`67.1×` faster**, `3.9 ms/PDF`), and persists expensive `VisionPageCard` summaries for `0`-LLM / `0`-render reloads.
 
@@ -137,7 +137,7 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine},
   year    = {2026},
-  version = {0.7.0},
+  version = {0.7.1},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
 }

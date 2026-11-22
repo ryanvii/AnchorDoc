@@ -1,9 +1,9 @@
 """Zero-LLM 4-tool Progressive MCP Server (`anchordoc mcp`) for AI coding agents.
 
-Exposes four orthogonal tools with strict path allowlisting and zero internal LLM calls:
+Exposes four orthogonal read-only tools with strict path allowlisting and zero internal LLM calls:
 - `doc_outline`: L0 structural anchor map + route hint (<= 1,500 est_tokens)
 - `doc_locate` : L1 zero-LLM query-aware snippet locator (<= 1,200 est_tokens)
-- `doc_read`   : L2 anchored page reader `p12:L07` with hard caps & duplicate-read ledger
+- `doc_read`   : L2 anchored page reader `p12:L07` with hard caps, read ledger & native ImageContent
 - `doc_verify` : deterministic quote verifier, page localizer, AST math & operand provenance
 
 Logs go strictly to stderr; stdout is reserved exclusively for MCP JSON-RPC.
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -27,10 +28,18 @@ MCP_INSTRUCTIONS = (
     "4) Call doc_verify on verbatim quotes and arithmetic formulas before stating your final answer."
 )
 
+_READONLY_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "doc_outline",
         "description": "L0 structural map of a PDF (<=1.5k tok): page count, printed page range, route_hint, and zoomable headings.",
+        "annotations": dict(_READONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -45,6 +54,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "doc_locate",
         "description": "L1 zero-LLM query-aware snippet locator (<=1.2k tok) combining lexical BM25-RRF, printed page refs, and table continuations.",
+        "annotations": dict(_READONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -61,6 +71,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "doc_read",
         "description": "L2 anchored page reader (<=5 pages, <=6k tok) returning stable p12:L07 line anchors with a session duplicate-read ledger.",
+        "annotations": dict(_READONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -78,18 +89,45 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "doc_verify",
         "description": "Deterministic CiteOrDie verifier: checks verbatim quotes, localizes pages, evaluates safe AST math, and verifies operand provenance.",
+        "annotations": dict(_READONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
                 "doc_id": {"type": "string"},
-                "quotes": {"type": "array", "items": {"type": "object"}},
+                "quotes": {
+                    "type": "array",
+                    "items": {"oneOf": [{"type": "string"}, {"type": "object"}]},
+                    "description": "Verbatim quote strings or {text, page?} objects.",
+                },
                 "formula": {"type": "string", "default": ""},
                 "cited_pages": {"type": "array", "items": {"type": "integer"}},
             },
         },
     },
 ]
+
+
+def split_mcp_payload(result: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Extract base64 PNGs out of a `doc_read` result so images are sent as MCP ImageContent blocks,
+    NEVER stuffed as hundreds of thousands of base64 characters inside JSON TextContent.
+    """
+    images: list[str] = []
+    if not isinstance(result, dict) or not isinstance(result.get("pages"), list):
+        return result, images
+    clean_pages: list[dict[str, Any]] = []
+    for block in result["pages"]:
+        if isinstance(block, dict) and "images_b64" in block:
+            b_copy = {k: v for k, v in block.items() if k != "images_b64"}
+            imgs = [str(x) for x in (block.get("images_b64") or []) if x]
+            images.extend(imgs)
+            b_copy["images_returned"] = len(imgs)
+            clean_pages.append(b_copy)
+        else:
+            clean_pages.append(block)
+    clean_result = dict(result)
+    clean_result["pages"] = clean_pages
+    return clean_result, images
 
 
 class AnchorDocMCPApp:
@@ -101,6 +139,7 @@ class AnchorDocMCPApp:
         store: BundleStore | None = None,
         max_file_mb: float = 100.0,
         backend: str = "pypdfium2",
+        max_open_docs: int = 16,
     ) -> None:
         resolved = [Path(r).expanduser().resolve() for r in roots if str(r).strip()]
         if not resolved:
@@ -109,7 +148,9 @@ class AnchorDocMCPApp:
         self.store = store
         self.max_file_bytes = int(max_file_mb * 1024 * 1024)
         self.backend = backend
-        self._contexts_by_id: dict[str, DocContext] = {}
+        self.max_open_docs = max(1, int(max_open_docs))
+        # LRU cache: doc_id -> (DocContext, path, (size, mtime_ns))
+        self._contexts: OrderedDict[str, tuple[DocContext, Path, tuple[int, int]]] = OrderedDict()
         self._id_by_path: dict[Path, str] = {}
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -127,20 +168,46 @@ class AnchorDocMCPApp:
             raise ValueError(f"PDF exceeds size limit ({self.max_file_bytes // (1024 * 1024)} MB).")
         return p
 
+    @staticmethod
+    def _file_sig(p: Path) -> tuple[int, int]:
+        st = p.stat()
+        return (st.st_size, st.st_mtime_ns)
+
+    def _evict_if_needed(self) -> None:
+        while len(self._contexts) > self.max_open_docs:
+            old_id, (_, old_path, _) = self._contexts.popitem(last=False)
+            if self._id_by_path.get(old_path) == old_id:
+                self._id_by_path.pop(old_path, None)
+
     def _get_context(self, args: dict[str, Any]) -> DocContext:
         doc_id = str(args.get("doc_id") or "").strip()
         raw_path = str(args.get("path") or "").strip()
-        if doc_id and doc_id in self._contexts_by_id:
-            return self._contexts_by_id[doc_id]
+
+        if doc_id and doc_id in self._contexts:
+            ctx, p, sig = self._contexts[doc_id]
+            if p.is_file() and self._file_sig(p) == sig:
+                self._contexts.move_to_end(doc_id)
+                return ctx
+            # File changed on disk: reload fresh
+            self._contexts.pop(doc_id, None)
+            raw_path = str(p)
+
         if not raw_path:
             raise ValueError("Either a valid `path` or a previously opened `doc_id` is required.")
         p = self._resolve_allowed_pdf(raw_path)
+        sig = self._file_sig(p)
         existing_id = self._id_by_path.get(p)
-        if existing_id and existing_id in self._contexts_by_id:
-            return self._contexts_by_id[existing_id]
+        if existing_id and existing_id in self._contexts:
+            ctx, _, old_sig = self._contexts[existing_id]
+            if old_sig == sig:
+                self._contexts.move_to_end(existing_id)
+                return ctx
+            self._contexts.pop(existing_id, None)
+
         ctx = DocContext.open(p, store=self.store, backend=self.backend)
-        self._contexts_by_id[ctx.doc_id] = ctx
+        self._contexts[ctx.doc_id] = (ctx, p, sig)
         self._id_by_path[p] = ctx.doc_id
+        self._evict_if_needed()
         return ctx
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -182,6 +249,49 @@ class AnchorDocMCPApp:
         raise ValueError(f"Unknown AnchorDoc MCP tool: {name!r}")
 
 
+def _build_mcp_server(app: AnchorDocMCPApp):
+    """Instantiate the official MCP `Server` with graceful compatibility across SDK versions."""
+    import anyio
+    from mcp import types as mcp_types
+    from mcp.server import Server
+
+    try:
+        server = Server("anchordoc", instructions=MCP_INSTRUCTIONS)
+    except TypeError:
+        server = Server("anchordoc")
+
+    @server.list_tools()
+    async def _list_tools() -> list[mcp_types.Tool]:
+        out: list[mcp_types.Tool] = []
+        for t in app.list_tools():
+            kwargs: dict[str, Any] = {
+                "name": t["name"],
+                "description": t["description"],
+                "inputSchema": t["inputSchema"],
+            }
+            if hasattr(mcp_types, "ToolAnnotations"):
+                kwargs["annotations"] = mcp_types.ToolAnnotations(**t["annotations"])
+            try:
+                out.append(mcp_types.Tool(**kwargs))
+            except TypeError:
+                kwargs.pop("annotations", None)
+                out.append(mcp_types.Tool(**kwargs))
+        return out
+
+    @server.call_tool()
+    async def _call_tool(name: str, arguments: dict[str, Any] | None):
+        raw_result = await anyio.to_thread.run_sync(app.call_tool, name, arguments or {})
+        clean_result, images_b64 = split_mcp_payload(raw_result)
+        blocks: list[Any] = [
+            mcp_types.TextContent(type="text", text=json.dumps(clean_result, ensure_ascii=False))
+        ]
+        for b64 in images_b64:
+            blocks.append(mcp_types.ImageContent(type="image", data=b64, mimeType="image/png"))
+        return blocks
+
+    return server
+
+
 def serve_stdio(
     roots: Sequence[str | Path],
     store_dir: str | Path | None = None,
@@ -190,8 +300,6 @@ def serve_stdio(
     """Run the AnchorDoc MCP server over stdio (requires optional `pip install 'anchordoc[mcp]'`)."""
     try:
         import asyncio
-        from mcp import types as mcp_types
-        from mcp.server import Server
         from mcp.server.stdio import stdio_server
     except ImportError:
         print(
@@ -202,23 +310,7 @@ def serve_stdio(
 
     store = BundleStore(store_dir) if store_dir else BundleStore()
     app = AnchorDocMCPApp(roots=roots, store=store, max_file_mb=max_file_mb)
-    server = Server("anchordoc", instructions=MCP_INSTRUCTIONS)
-
-    @server.list_tools()
-    async def _list_tools() -> list[mcp_types.Tool]:
-        return [
-            mcp_types.Tool(
-                name=t["name"],
-                description=t["description"],
-                inputSchema=t["inputSchema"],
-            )
-            for t in app.list_tools()
-        ]
-
-    @server.call_tool()
-    async def _call_tool(name: str, arguments: dict[str, Any] | None) -> list[mcp_types.TextContent]:
-        result = app.call_tool(name, arguments or {})
-        return [mcp_types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+    server = _build_mcp_server(app)
 
     async def _run() -> None:
         async with stdio_server() as (read_stream, write_stream):
