@@ -115,3 +115,18 @@ All evaluations below use the **exact same base model (`deepseek-v4-flash`, `tem
 |---|---:|---:|---:|---:|---:|
 | **FinanceBench (84 SEC PDFs)** | 12,013 | 22.126s | **0.330s (`3.9 ms/PDF`)** | **67.1×** | 50.8 MB |
 | **MMLongBench (7 multimodal PDFs)** | 170 | 0.138s | **0.011s (`1.6 ms/PDF`)** | **13.1×** | 472 KB |
+
+
+---
+
+## 5. Cross-Model Verification on Official `DeepSeek-V4.1-Flash` (`v0.7.1 --route auto`) & T6 Provenance Audit
+
+All 401 official questions re-evaluated cleanly on the independent official DeepSeek multimodal API (`https://api.deepseek.com/v1`, model `deepseek-flash` / `DeepSeek-V4.1-Flash`, `temperature=0`, fresh cache):
+
+| Benchmark (`DeepSeek-V4.1-Flash`, `v0.7.1 --route auto`) | Baseline (Same Model) | **AnchorDoc `v0.7.1`** | 95% Bootstrap CI / Audit Provenance |
+|---|---|---|---|
+| **FinanceBench** (Full 150/150, 84 SEC PDFs) | Chunk-BM25: `33.3%` E2E (`[26.0, 40.7]`) | Hit@5 **`92.0%`** · AllGold@5 **`88.7%`** · E2E **`82.7%`** (`metrics` **`92.0%`**, `domain` **`80.0%`**) · `3.87` calls/q | `[76.7, 88.7]`, McNemar $p = 2.04 \times 10^{-20}$; QuoteVerified **`99.3%`**, OperandsGrounded **`100.0%` (101/101)** |
+| **MMLongBench-Doc** (101q, 7 multimodal PDFs) | ChunkRAG: `37.6%` E2E · `0.0%` Chart/Fig | Hit@5 **`93.8%`** · Overall **`62.4%`** · **Chart/Fig `45.5%`** · Text/Tbl **`65.6%`** · Unans `75.0%` · `3.00` calls/q | `[52.5, 71.3]`; Honest Grounding Calibration: `text_verified` **`77.8%`** > `vision_card` **`60.7%`** > `vlm_attested` **`41.4%`** |
+| **ContractNLI-Long** (150q, balanced 50/50/50) | LongContext: `77.3%` Acc · `15.0%` FER · `77.9%` HiConf | Acc **`77.3%`** · Macro-F1 **`77.4%`** · **FER `12.0%` (-3.0pp)** · **HiConfAcc `83.0%` (+5.1pp)** | `[70.7, 84.0]`, McNemar $p = 1.0$; QuoteVerified **`88.0%`** |
+
+*Reproduce statistics & bootstrap 95% CIs: `python3 benchmarks/compute_paper_stats.py`.*
