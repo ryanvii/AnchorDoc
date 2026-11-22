@@ -539,6 +539,9 @@ class FactAdjudicator:
         allow_repair: bool = True,
         *,
         route: Route = "navigate",
+        locate_sufficient: bool | None = None,
+        b42_selected: list[int] | None = None,
+        strict_abstention: bool = False,
     ) -> AuditVerdict:
         """Multimodal page-image + text QA with a calibrated tri-state evidence gate.
 
@@ -624,14 +627,24 @@ class FactAdjudicator:
         obs = parsed.get("observations") if isinstance(parsed.get("observations"), list) else []
         obs_details = [str(o.get("detail") or "").strip() for o in obs if isinstance(o, dict) and str(o.get("detail") or "").strip()]
 
-        # Conservative deterministic attestation over the WHOLE document (text + VisionPageCards ONLY;
-        # never include unverified VLM obs_details so hallucinated terms cannot self-attest).
+        # Conservative deterministic attestation over the WHOLE document AND locally on rendered pages
+        # (never include unverified VLM obs_details so hallucinated terms cannot self-attest).
         haystack = list(doc.pages) + list(vsums.values())
         missing_terms = unattested_terms(question, haystack)
+        local_haystack = [doc.page_text(p) for p in pages] + [vsums.get(p, "") for p in pages]
+        local_missing = unattested_terms(question, local_haystack) if any(x.strip() for x in local_haystack) else []
+        dual_channel_insuff = (
+            locate_sufficient is False
+            and not (b42_selected or [])
+            and status_ev != "stated"
+        )
         meta: dict[str, Any] = {
             "evidence_status": status_ev,
             "entity_time_match": etm,
             "unattested_terms": missing_terms,
+            "local_unattested_terms": local_missing,
+            "locate_sufficient": locate_sufficient,
+            "dual_channel_insufficient": dual_channel_insuff,
             "rendered_pages": rendered_pages,
             "zoom_page": zoom_page,
             "zoom_tiles": n_tiles,
@@ -644,6 +657,12 @@ class FactAdjudicator:
             gate = "MM_ENTITY_TIME_MISMATCH"
         elif missing_terms:
             gate = "MM_UNATTESTED_TERMS"
+        elif strict_abstention and dual_channel_insuff:
+            # Opt-in only: text-only locators cannot read pixels, so unconditional gating
+            # suppresses valid chart/figure derivations (-18.2pp on MMLongBench Chart/Fig).
+            gate = "MM_DUAL_CHANNEL_INSUFFICIENT"
+        elif strict_abstention and local_missing and status_ev != "stated":
+            gate = "MM_LOCAL_UNATTESTED"
         elif _is_na_answer(ans):
             gate = "MM_MODEL_ABSTAINED"
         if gate:

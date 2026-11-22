@@ -130,3 +130,34 @@ All 401 official questions re-evaluated cleanly on the independent official Deep
 | **ContractNLI-Long** (150q, balanced 50/50/50) | LongContext: `77.3%` Acc · `15.0%` FER · `77.9%` HiConf | Acc **`77.3%`** · Macro-F1 **`77.4%`** · **FER `12.0%` (-3.0pp)** · **HiConfAcc `83.0%` (+5.1pp)** | `[70.7, 84.0]`, McNemar $p = 1.0$; QuoteVerified **`88.0%`** |
 
 *Reproduce statistics & bootstrap 95% CIs: `python3 benchmarks/compute_paper_stats.py`.*
+
+---
+
+## 6. `v0.8.0` Ecosystem & Credibility Benchmarks (`DeepSeek-V4.1-Flash`, `temp=0`)
+
+### 6.1 MCP Agent Head-to-Head: Native Full-PDF Stuffing vs Same Agent + AnchorDoc Zero-LLM MCP
+
+Controlled comparison on **15 stratified FinanceBench SEC 10-K/10-Q filings** (5 `metrics`, 5 `novel`, 5 `domain`; avg **144.7 pages/PDF**) using the **exact same base model (`DeepSeek-V4.1-Flash`, `temperature=0`)** and the exact same `judge_answer` evaluator (`benchmarks/run_mcp_agent_benchmark.py`):
+
+| Same Agent (`DeepSeek-V4.1-Flash`, `temp=0`) | E2E Acc | Metrics (5q) | Novel (5q) | Domain (5q) | Quote Verified | Avg Prompt Tokens | Uncached (Newly Billed) Input Tokens | Avg Tools / Latency |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Native Full-PDF Stuffing** *(450k-char ≈ 128k-tok cap)* | `60.0%` (9/15) | `80.0%` | `60.0%` | `40.0%` | `53.3%` | `90,824` | `72,827` | `0` tools · `5.42s` |
+| **⚓ Same Agent + AnchorDoc Zero-LLM MCP** *(`0` server LLM calls)* | **`86.7%`** (13/15, **`+26.7pp`**) | **`100.0%`** | **`100.0%`** | **`60.0%`** | **`100.0%`** (15/15) | **`28,188`** (**`-69.0%`**) | **`5,430`** (**`-92.5%`**, **`13.4×` lower**) | `6.27` tools · `10.36s` |
+
+*Honesty note*: 7 of 15 massive filings exceeded the 450k-char (~100k-tok) single-shot cap in Native Full-PDF; on the **8 completely untruncated filings** (`100%` of pages inside Native Full-PDF's prompt), AnchorDoc MCP still outperforms Native Full-PDF **`87.5%` (7/8) vs `50.0%` (4/8)** (`+37.5pp`) due to eliminating long-context attention decay ("context rot"), while achieving **`80.7%`** multi-turn KV prefix cache reuse (`22,758 / 28,188` tok).
+
+### 6.2 T7 3-Run Live Variance, Prefix-Stable `nav` KV Caching & Offline Replay (`benchmarks/run_variance_t7.py`)
+
+Evaluated across **30 FinanceBench questions spanning 5 multi-question SEC 10-K filings** (`AMCOR`, `AMD`, `AMERICANEXPRESS`, `BOEING`, `PEPSICO`), ordered by document to exercise `v0.8.0`'s prefix-stable `anchordoc_nav` prompt (`Printed TOC + AnchorMap` before `Query`):
+
+| Run Mode (`DeepSeek-V4.1-Flash`, `--route auto`) | E2E Acc | Hit@5 | AllGold@5 | Quote Verified | Avg Prompt Tok | Real Server Prefix Cache Hit | Avg Calls |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Live Run 1 (cold KV) | `83.33%` | `86.7%` | `83.3%` | `100.0%` | `10,751` | `43.7%` (`4,698` tok) | `4.17` |
+| Live Run 2 (warm KV) | `90.00%` | `83.3%` | `80.0%` | `100.0%` | `10,745` | `55.3%` (`5,939` tok) | `4.10` |
+| Live Run 3 (warm KV) | `83.33%` | `83.3%` | `80.0%` | `100.0%` | `10,655` | `65.1%` (`6,933` tok) | `4.10` |
+| **Live 3-Run Mean ± SD** | **`85.55% ± 3.85%`** | **`84.43% ± 1.96%`** | **`81.10% ± 1.91%`** | **`100.00% ± 0.00%`** | **`10,717 ± 54`** | **`54.7% ± 10.7%`** | **`4.12 ± 0.04`** |
+| **Offline SHA Replay (3×)** | **`83.33% ± 0.00%`** | **`86.70% ± 0.00%`** | **`83.30% ± 0.00%`** | **`100.00% ± 0.00%`** | `10,704` | *(local SHA replay, `1.24s` steady-state)* | `4.13` |
+
+### 6.3 Negative Ablation — Why Unconditional Text-Side Local Abstention Hurts Visual PDFs
+
+Testing unconditional `MM_DUAL_CHANNEL_INSUFFICIENT` (`locate_sufficient=False` + `b42_selected=[]`) and `MM_LOCAL_UNATTESTED` on MMLongBench-Doc 101 (`DeepSeek-V4.1-Flash`, `results/ablation_mm_strict_text_gate_v08.json`) raised unanswerable abstention (`75.0% → 80.6%`, `+5.6pp`) **at the cost of collapsing Chart/Figure accuracy from `45.5% → 27.3%` (`-18.2pp`) and Overall from `62.4% → 55.4%` (`-7.0pp`)**, because text-only locators cannot read pixels inside charts or images. In `v0.8.0`, these gates are strictly opt-in via `strict_abstention=True` while default mode preserves full visual recall and exposes calibrated provenance tiers (`text_verified 77.8% > vision_card_supported 60.7% > vlm_attested 41.4%`).

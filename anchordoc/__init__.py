@@ -10,7 +10,7 @@ from .runtime import BM25Okapi, CachedLLM, estimate_tokens, localize_quote_pages
 from .store import BundleStore, load_document
 from .types import AuditVerdict, ExtractedRequirement, PageCard, RetrievalTrace, SourceLine, SpanCard
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 __all__ = [
     "__version__",

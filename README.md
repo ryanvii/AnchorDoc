@@ -51,8 +51,9 @@
   - **Unseen Blind Generalization (`v0.6.0`, 10 unseen PDFs, 492 pages, 91q incl. 52 Chart/Figure)**: **91.0% Hit@5**, **50.0% Chart/Figure** (vs `1.9%` ChunkRAG), **50.5% overall** (`+19.7pp` over ChunkRAG).
 - **ContractNLI-Long (EMNLP — 150 long legal NDAs `>= 10k` chars, balanced 50/50/50)**
   - **Two-Stage Logic NLI + Adaptive `ReadAll` Router**: **81.3% Accuracy / 81.3% Macro-F1** (`10.0%` FER on `test-150`); on the strictly unseen held-out `dev-150` split (34 unseen contracts), `v0.7` `route=auto` maintains statistical parity in accuracy (`79.3%` vs `78.0%`, Macro-F1 `79.5%` vs `77.9%`) while cutting LLM calls by **41%** (`~3.0 → 1.77 calls/q`).
-- **Persistent SQLite WAL `BundleStore` Reload Speedup**
+- **Persistent SQLite WAL `BundleStore` & Prefix-Stable `nav` Caching (`v0.8.0`)**
   - Reloads all **84 SEC PDFs (12,013 pages)** in **`0.330s`** vs `22.13s` cold parse (**`67.1×` faster**, `3.9 ms/PDF`), and persists expensive `VisionPageCard` summaries for `0`-LLM / `0`-render reloads.
+  - **T7 3-Run Live Variance & Prefix KV Cache** (30 stratified FinanceBench questions across 5 multi-question SEC 10-Ks on official `DeepSeek-V4.1-Flash`, `temp=0`): **`85.55% ± 3.85%`** E2E Acc, **`100.0% ± 0.0%`** Quote Verified (90/90), **`54.7% ± 10.7%`** real server-side KV prefix cache hit rate (rising to **`65.1%`** warm via prefix-stable `anchordoc_nav`), and **`83.33% ± 0.00%`** deterministic SHA-cached offline replay.
 
 See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, ablations, cost-amortization notes, and one-command reproduction scripts.
 
@@ -99,18 +100,52 @@ export_html([verdict], "report.html", doc=doc)               # Standalone two-pa
 
 ## MCP Server for AI Agents (Zero API Key)
 
-Give Claude Code, Cursor, Antigravity, or Devin progressive, token-bounded, verifiable access to 500-page PDFs with **zero external LLM calls** (the host agent *is* the LLM):
+Give **Claude Code, Cursor, Windsurf, Antigravity, or Devin** progressive, token-bounded, verifiable access to 500-page PDFs with **zero external LLM calls** (the host agent *is* the LLM — AnchorDoc acts as its zero-LLM index, token guardrail, and deterministic verifier):
+
+### Same-Agent Benchmark: Native Full-PDF vs AnchorDoc Zero-LLM MCP (`DeepSeek-V4.1-Flash`, `temp=0`, 15 SEC 10-K/10-Q filings, avg 144.7p)
+
+| Same Agent (`DeepSeek-V4.1-Flash`) | E2E Acc | Metrics / Novel | Quote Verified | Avg Prompt Tokens | Newly Billed Uncached Tokens |
+|---|---:|---:|---:|---:|---:|
+| Native Full-PDF Stuffing *(450k-char cap)* | `60.0%` | `80% / 60%` | `53.3%` | `90,824` | `72,827` |
+| **⚓ Same Agent + AnchorDoc MCP** *(`0` server LLM calls)* | **`86.7%` (+26.7pp)** | **`100% / 100%`** | **`100.0%` (15/15)** | **`28,188` (-69.0%)** | **`5,430` (-92.5%, 13.4× cheaper)** |
+
+*(Even on the 8 completely untruncated PDFs where 100% of text fit in Native Full-PDF, AnchorDoc MCP still won **`87.5%` vs `50.0%`** by preventing long-context attention decay.)*
+
+### 1-Minute MCP Setup (Claude Code / Cursor / Windsurf / Devin)
 
 ```bash
 pip install 'anchordoc[mcp]'
-anchordoc mcp --root /path/to/pdfs
 ```
 
-Exposes 4 orthogonal tools with strict path allowlisting and hard token caps:
+Add to your `mcp.json` (Cursor `.cursor/mcp.json`, Claude Desktop/Code `claude_desktop_config.json`, or Windsurf/Devin MCP config):
+
+```json
+{
+  "mcpServers": {
+    "anchordoc": {
+      "command": "anchordoc",
+      "args": ["mcp", "--root", "/path/to/your/pdfs"]
+    }
+  }
+}
+```
+
+Exposes 4 orthogonal, read-only tools with strict `--root` allowlisting and hard token caps:
 - `doc_outline` (L0 map, ≤1.5k tok): structure, printed page range, and `route_hint`.
-- `doc_locate` (L1 zero-LLM locator, ≤1.2k tok): lexical + page-ref + continuation snippets.
-- `doc_read` (L2 anchored reader, ≤5 pages): stable `p12:L07` anchors + session duplicate-read ledger.
+- `doc_locate` (L1 zero-LLM locator, ≤1.2k tok): lexical BM25-RRF + page-ref + continuation snippets.
+- `doc_read` (L2 anchored reader, ≤5 pages): stable `p12:L07` anchors + session duplicate-read ledger + native MCP `ImageContent`.
 - `doc_verify`: deterministic quote verification, page localization, AST math (`safe_calc`), and operand provenance.
+
+### Progressive Context Engineering Ecosystem (Documents + Videos)
+
+AnchorDoc shares the exact same **zero-vector, zero-server-LLM, token-budgeted progressive disclosure protocol** with our companion video context MCP server:
+
+| Modality | Repository | Progressive Protocol (`L0 → L1 → L2 → Verify`) | Dependencies |
+|---|---|---|---|
+| **Long PDFs & Filings** | **⚓ [AnchorDoc](https://github.com/ryanvii/AnchorDoc)** *(this repo)* | `doc_outline` → `doc_locate` → `doc_read` → `doc_verify` | Pure Python + Apache-2.0 `pypdfium2` |
+| **Long Videos & Demos** | **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** | `peek_video_map` → `search_video_moments` → `inspect_frame_range` | `yt-dlp` / `ffmpeg` / `RapidOCR` |
+
+*Kept as separate lightweight repositories so document-only users never install video binaries (`ffmpeg`/`OCR`), while AI agents can mount both MCP servers side-by-side under one unified progressive context workflow.*
 
 ---
 
@@ -137,7 +172,7 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine},
   year    = {2026},
-  version = {0.7.1},
+  version = {0.8.0},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
 }

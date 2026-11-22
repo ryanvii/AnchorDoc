@@ -48,21 +48,56 @@
    - **严格未见盲测（`v0.6.0`，10 份全新 PDF 共 492 页，含 52 道图表题）**：检索 Hit@5 **`91.0%`**，图表问答实打实 **`50.0%`**（ChunkRAG 仅 `1.9%`），总准 **`50.5%`**（领先 ChunkRAG +19.7pp）。
 3. **ContractNLI-Long（长法律合同 150 题 `test` + 34 份未见合同 150 题 `dev` 盲测）**
    - **`v0.7` 两阶段逻辑 NLI + 自适应 `ReadAll` 路由**：`test-150` 达 **`81.3%` F1 / `10.0%` FER**；在完全未见的 `dev-150` 盲测集上，`route=auto` 在准确率统计持平（`79.3%` vs `78.0%`，Macro-F1 `79.5%` vs `77.9%`）的前提下将 LLM 调用次数直降 **41%**（`~3.0 → 1.77 次/题`）。
-4. **文档级 SQLite WAL 持久化（`BundleStore`）**
+4. **文档级 SQLite WAL 持久化（`BundleStore`）与前缀稳定 KV 缓存（`v0.8.0`）**
    - 84 份年报（12,013 页）冷解析 `22.13s` → **热重载仅 `0.330s`（快 `67.1×`，单份 `3.9 ms`）**，且持久化昂贵的 `VisionPageCard` 实现零渲染、零重复 VLM 费用热启动。
+   - **T7 3 轮实时方差与真实前缀缓存审计**（30 道多问题共享年报 SEC 10-K 题，官方 `DeepSeek-V4.1-Flash`, `temp=0`）：实时 3 轮 E2E **`85.55% ± 3.85%`**，逐字引文校验 **`100.0% ± 0.0%`**（90/90），前缀稳定 `nav` 触发真实服务端 KV 缓存命中率 **`54.7% ± 10.7%`**（热态最高 **`65.1%`**），离线 SHA 重放方差严格 **`0.00%`**。
 
 ---
 
 ## AI Agent 渐进式 MCP 服务端（零 API Key）
 
-让 Claude Code、Cursor、Antigravity、Devin 等编码 Agent 原生、低 Token、可核验地阅读 500 页 PDF（服务端**默认 0 次外部 LLM 调用**，由宿主 Agent 自己推理）：
+让 **Claude Code、Cursor、Windsurf、Antigravity、Devin** 等编码 Agent 原生、低 Token、可核验地阅读 500 页 PDF（服务端**默认 0 次外部 LLM 调用**，由宿主 Agent 自己推理，AnchorDoc 担任它的零 LLM 索引、Token 护栏与确定性校验器）：
+
+### 同底座 Agent 实测对比：原生整本塞 PDF vs 接入 AnchorDoc MCP（`DeepSeek-V4.1-Flash`, `temp=0`, 15 份 SEC 10-K/10-Q 财报，均长 144.7 页）
+
+| 同一个 Agent (`DeepSeek-V4.1-Flash`) | 端到端准确率 | 数值报表 / 创新题 | 逐字引文校验率 | 平均总 Prompt Token | 扣缓存后新增计费 Token |
+|---|---:|---:|---:|---:|---:|
+| 原生整本 PDF 塞上下文 *（450k 字符上限）* | `60.0%` | `80% / 60%` | `53.3%` | `90,824` | `72,827` |
+| **⚓ 接入 AnchorDoc 零 LLM MCP** *（`0` 服务端 LLM）* | **`86.7%` (+26.7pp)** | **`100% / 100%`** | **`100.0%` (15/15)** | **`28,188` (-69.0%)** | **`5,430` (-92.5%，省 13.4 倍)** |
+
+*（即便在 8 份 100% 全文未截断的财报上，AnchorDoc MCP 仍以 **`87.5%` vs `50.0%`** 大幅领先，直接规避超长上下文注意力衰减。）*
+
+### 1 分钟接入 Claude Code / Cursor / Windsurf / Devin
 
 ```bash
 pip install 'anchordoc[mcp]'
-anchordoc mcp --root /path/to/pdfs
 ```
 
-仅暴露 4 个硬限流正交工具（带 `--root` 目录白名单）：`doc_outline`（L0 地图 ≤1.5k tok）、`doc_locate`（L1 零 LLM 片段定位 ≤1.2k tok）、`doc_read`（L2 最多 5 页 + `p12:L07` 稳定行锚 + 防重复阅读账本）、`doc_verify`（确定性引文反查 + AST 数学验算 + 操作数溯源）。
+在客户端 `mcp.json`（如 Cursor `.cursor/mcp.json` 或 Claude `claude_desktop_config.json`）中添加：
+
+```json
+{
+  "mcpServers": {
+    "anchordoc": {
+      "command": "anchordoc",
+      "args": ["mcp", "--root", "/path/to/your/pdfs"]
+    }
+  }
+}
+```
+
+仅暴露 4 个硬限流只读正交工具（带 `--root` 目录白名单）：`doc_outline`（L0 地图 ≤1.5k tok）、`doc_locate`（L1 零 LLM 片段定位 ≤1.2k tok）、`doc_read`（L2 最多 5 页 + `p12:L07` 稳定行锚 + 防重复阅读账本 + 原生 MCP `ImageContent`）、`doc_verify`（确定性引文反查 + AST 数学验算 + 操作数溯源）。
+
+### 渐进式上下文工程生态（文档 + 视频双协议联动）
+
+AnchorDoc 与姊妹项目 **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** 共享同一套 **“零向量库、零服务端 LLM、硬 Token 预算渐进披露”** 协议家族：
+
+| 模态 | 开源仓库 | 渐进式协议链路 | 依赖边界 |
+|---|---|---|---|
+| **超长 PDF 与高风险文档** | **⚓ [AnchorDoc](https://github.com/ryanvii/AnchorDoc)** *（本仓库）* | `doc_outline` → `doc_locate` → `doc_read` → `doc_verify` | 纯 Python + Apache-2.0 `pypdfium2` |
+| **超长视频与屏幕录屏** | **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** | `peek_video_map` → `search_video_moments` → `inspect_frame_range` | `yt-dlp` / `ffmpeg` / `RapidOCR` |
+
+*两仓库刻意保持轻量化独立发布（文档用户无需安装视频转码与 OCR 重依赖），但在 Agent 客户端内可并排挂载，用同一套渐进式心智处理“文档 + 视频”超长多模态上下文。*
 
 完整榜单、消融实验、成本摊销分析与复现脚本见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。
 

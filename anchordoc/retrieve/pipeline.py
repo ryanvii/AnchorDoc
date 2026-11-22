@@ -348,9 +348,9 @@ class AnchorRetriever:
                     "anchordoc_nav",
                     "You are a precision document structure navigator. Return JSON only.",
                     (
-                        f"Query: {query}\n\n"
                         f"Printed TOC (printed page + {offset} approx physical PDF page):\n{toc_text or '(none)'}\n\n"
                         f"Zero-LLM Structural Anchor Map (physical pages p.N):\n{outline}\n\n"
+                        f"Query: {query}\n\n"
                         "Return up to 5 specific physical PDF pages (direct_pages) and up to 2 short physical ranges "
                         "(ranges: [start, end], max 15 pages each) most likely to hold the primary evidence.\n"
                         'Return JSON: {"direct_pages": [int], "ranges": [[int, int]], "rationale": ""}'

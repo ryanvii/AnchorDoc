@@ -52,6 +52,8 @@ class MultimodalDocAdapter:
             question, top_k=top_k, use_anchor_map=True, use_gap_followup=True, route=route, task=task  # type: ignore[arg-type]
         )
         if use_vision:
+            loc_suf_raw = trace.layers.get("locate_sufficient")
+            loc_suf = bool(loc_suf_raw[0]) if isinstance(loc_suf_raw, list) and loc_suf_raw else None
             verdict = self.adjudicator.answer_multimodal(
                 self.doc,
                 question,
@@ -59,6 +61,8 @@ class MultimodalDocAdapter:
                 item_id=item_id,
                 vision_summaries=self.retriever.index.vision_summaries,
                 route=trace.route,  # type: ignore[arg-type]
+                locate_sufficient=loc_suf,
+                b42_selected=trace.layers.get("b42_selected"),
             )
         else:
             verdict = self.adjudicator.answer_numerical(
