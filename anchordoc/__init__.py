@@ -9,8 +9,9 @@ from .retrieve import AnchorRetriever, SpanRetriever, plan_prose_route, plan_rou
 from .runtime import BM25Okapi, CachedLLM, estimate_tokens, localize_quote_pages, rrf, tokenize, verify_quote
 from .store import BundleStore, load_document
 from .types import AuditVerdict, ExtractedRequirement, PageCard, RetrievalTrace, SourceLine, SpanCard
+from .verify import verify_claim, verify_operand
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "__version__",
@@ -40,6 +41,8 @@ __all__ = [
     "rrf",
     "tokenize",
     "verify_quote",
+    "verify_claim",
+    "verify_operand",
     "export_json",
     "export_markdown",
     "export_html",

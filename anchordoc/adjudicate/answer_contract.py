@@ -292,44 +292,72 @@ def compose_numeric_answer(
 # ---------------------------------------------------------------------------
 
 _TRIVIAL_CONSTANTS = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 12.0, 100.0, 1000.0, 365.0, 360.0, 52.0, 1e6, 1e9}
-_FORMULA_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+_FORMULA_SIGNED_NUM_RE = re.compile(r"(?<![0-9.])(?P<sign>-)?(?P<num>\d+(?:\.\d+)?)")
 
 
-def _source_numbers(text: str) -> list[float]:
-    vals: list[float] = []
-    for raw in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+def _formula_signed_operands(formula: str) -> list[tuple[str, float]]:
+    """Extract operands from an arithmetic expression, attaching unary minus signs."""
+    clean = re.sub(r"(?<=\d),(?=\d{3}\b)", "", formula or "")
+    out: list[tuple[str, float]] = []
+    for m in _FORMULA_SIGNED_NUM_RE.finditer(clean):
+        num = m.group("num")
+        sign = m.group("sign") or ""
+        if sign == "-":
+            # Unary minus only if start of string or preceded by operator / '(' (ignoring spaces)
+            prev = clean[: m.start()].rstrip()
+            if prev and prev[-1] not in "(+-*/,=":
+                sign = ""
+        raw = f"{sign}{num}"
         try:
-            vals.append(float(raw.replace(",", "")))
+            out.append((raw, float(raw)))
         except ValueError:
             continue
-    return vals
+    return out
 
 
-def operands_grounded(formula: str, source_text: str) -> tuple[bool, list[str]]:
-    """Check every non-trivial operand of ``formula`` appears in ``source_text``.
+def _source_signed_numbers(text: str) -> list[float]:
+    from ..runtime.text import extract_signed_numbers
 
-    Matching strips thousands separators before extracting operands and allows thousand/million
-    scaling (tables "in millions"), percent<->fraction and rounding to the operand's precision.
+    return [val for val, _pct, _raw in extract_signed_numbers(text or "")]
+
+
+def operands_grounded(
+    formula: str,
+    source_text: str,
+    *,
+    strict_scale: bool = False,
+) -> tuple[bool, list[str]]:
+    """Check every non-trivial operand of ``formula`` appears in ``source_text`` with intact sign.
+
+    - Preserves negative signs (`-12`, `$(500)`, `(12.5%)`): a negative operand will NOT match a
+      positive-only number, and a positive operand will NOT match when only a negative value exists
+      (preventing silent sign flips).
+    - When ``strict_scale=True``, disables silent thousand/million scaling (`1e3`/`1e6`).
     Returns (all_grounded, ungrounded_operands).
     """
-    clean_formula = re.sub(r"(?<=\d),(?=\d{3}\b)", "", formula or "")
-    ops = _FORMULA_NUM_RE.findall(clean_formula)
+    ops = _formula_signed_operands(formula)
     if not ops:
         return True, []
-    src = _source_numbers(source_text)
+    src = _source_signed_numbers(source_text)
     src_set = set(src)
+    factors = (1.0,) if strict_scale else (1.0, 1e3, 1e-3, 1e6, 1e-6, 100.0, 0.01)
     missing: list[str] = []
-    for raw in ops:
-        v = float(raw)
-        if v in _TRIVIAL_CONSTANTS:
+    for raw, v in ops:
+        # Skip trivial constants (0, 1, 2, 12, 100, etc.) UNLESS their exact opposite sign
+        # appears in source_text (e.g., source has `-12%` and formula writes `+12`!).
+        if abs(v) in _TRIVIAL_CONSTANTS and not (v != 0 and (-v in src_set) and (v not in src_set)):
             continue
         if v in src_set:
             continue
-        dec = len(raw.split(".")[1]) if "." in raw else 0
+        num_part = raw.lstrip("-")
+        dec = len(num_part.split(".")[1]) if "." in num_part else 0
         tol = 0.5 * 10 ** (-dec) if dec else 0.5
         ok = False
         for s in src:
-            for f in (1.0, 1e3, 1e-3, 1e6, 1e-6, 100.0, 0.01):
+            # Enforce sign agreement: never ground -12 on +12 or +12 on -12
+            if (v < 0 < s) or (s < 0 < v):
+                continue
+            for f in factors:
                 sv = s * f
                 if abs(sv - v) <= max(tol, 1e-9) or (abs(v) > 0 and abs(sv - v) / abs(v) < 0.001):
                     ok = True

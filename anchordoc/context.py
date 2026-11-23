@@ -402,8 +402,38 @@ class DocContext:
         quotes: Sequence[str | dict[str, Any]] = (),
         formula: str = "",
         cited_pages: Sequence[int] = (),
+        *,
+        claim_text: str = "",
+        claimed_value: float | str | None = None,
+        claimed_unit: str = "",
+        operands: Sequence[dict[str, Any]] = (),
+        strict_scale: bool = False,
     ) -> dict[str, Any]:
-        """Verify verbatim quotes, localize exact pages, evaluate AST formula & operand provenance."""
+        """Verify verbatim quotes, localize exact pages, evaluate AST formula & operand provenance.
+
+        When ``operands``, ``claimed_value``, ``claimed_unit``, or ``claim_text`` are provided,
+        runs full adversarial claim verification (row/period/unit/sign/pp-vs-pct checks).
+        """
+        if operands or claimed_value is not None or claimed_unit or claim_text:
+            from .verify import verify_claim as _verify_claim
+
+            res = _verify_claim(
+                self.doc,
+                claim_text=claim_text,
+                quotes=quotes,
+                formula=formula,
+                claimed_value=claimed_value,
+                claimed_unit=claimed_unit,
+                operands=operands,
+                cited_pages=cited_pages,
+                strict_scale=strict_scale if not operands else True,
+            )
+            res["doc_id"] = self.doc_id
+            res["citations"] = [
+                f"p.{p} (printed {self.printed_map.get(p, str(p))})" for p in res.get("grounding_pages", [])
+            ]
+            return res
+
         quote_results: list[dict[str, Any]] = []
         localized_pages: list[int] = []
 
@@ -457,7 +487,7 @@ class DocContext:
         if formula:
             if scope_pages:
                 scope_text = "\n".join(self.doc.page_text(p) for p in scope_pages)
-                op_ok, ungrounded = operands_grounded(formula, scope_text)
+                op_ok, ungrounded = operands_grounded(formula, scope_text, strict_scale=strict_scale)
             else:
                 op_ok, ungrounded = False, [formula]
         else:

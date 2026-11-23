@@ -2,11 +2,12 @@
 
 # ⚓ AnchorDoc
 
-**Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine for 100–600 Page PDFs**
+**Verifiable Long-PDF Reading & Independent Claim Verification Engine for AI Agents**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
+[![Adversarial Verify](https://img.shields.io/badge/Adversarial%20Verify%2024q-100%25%20Catch%20%7C%200%25%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v090)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -33,9 +34,40 @@
 | Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | `36.6%` (`0.0%` Chart/Fig) |
 | Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind to pure-image slides |
 | LLM Tree-Index (PageIndex-style 12p win) | `11.4s` · `19.2` calls · `33k` tok | `35.9%` *(39q subset)* | `43.6%` *(39q subset)* | Requires VLM per page |
-| **⚓ AnchorDoc (`v0.8.0`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
+| **⚓ AnchorDoc (`v0.9.0`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
 
-*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Core engine paths in `v0.8.0` remain backward-compatible with frozen benchmark runs (`navigate` / `auto` / `full_pool`) while adding `BundleStore`, prefix-stable KV caching, and the 4-tool MCP server; complete per-version and cross-model (`DeepSeek-V4.1-Flash`) ablations are logged in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
+*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Retrieval/adjudication benchmarks reflect frozen milestone runs preserved backward-compatibly in `v0.9.0`, while `v0.9.0` hardens sign/period/unit/pp-vs-% verification and adds zero-API-key independent claim verification; complete ablations and cross-model (`DeepSeek-V4.1-Flash`) tables are in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
+
+---
+
+## Independent Claim Verification: Verify ANY AI Answer (`v0.9.0`, Zero API Key)
+
+Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an external claim (quotes, operands bound to row/period/unit, and formula) to AnchorDoc **before signing off**. Ordinary citation checkers strip punctuation and silently pass `-12%` as `12%` or accept last year's number from the same page; AnchorDoc deterministically catches:
+
+- **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**: `-12%` vs `12%`, accounting parentheses `$(145)` vs `$145` (even when `+12%` exists elsewhere on the same page!)
+- **`PERIOD_MISMATCH`**: value exists on the row/page, but came from `FY2023` while claiming `FY2024`
+- **`UNIT_SCALE_MISMATCH`**: `in millions` vs `billions` confusion (while passing valid `$1,200M == $1.2B` conversions)
+- **`PP_VS_PCT_CONFUSION`**: margin difference `40.0% - 36.0% = 4.0 pp` mislabeled as `4.0%`
+- **`ROW_LABEL_MISMATCH`** & **`FORMULA_MISMATCH`**: cross-row grabs & Python AST arithmetic mismatches
+
+### Run the Clean-Clone Adversarial Mini-Bench in 1 Second (0 Downloads, 0 API Keys)
+
+```bash
+python3 benchmarks/run_adversarial_verify.py
+```
+
+| Verifier (24 Cases: 14 Adversarial Traps + 10 Valid Claims) | Trap Catch Rate (↑) | False-Pass Rate (↓) | False-Alarm Rate (↓) | Exact Error Diagnosis |
+|---|---:|---:|---:|---:|
+| Naive Alphanumeric Citation & Loose Number Check | `7.1%` (1/14) | `92.9%` (13/14) | `0.0%` (0/10) | — |
+| **⚓ AnchorDoc `v0.9.0` (`verify_claim` / `doc_verify`)** | **`100.0%` (14/14)** | **`0.0%` (0/14)** | **`0.0%` (0/10)** | **`14 / 14`** |
+
+```bash
+# Verify any external AI claim from CLI (exit 0 = VERIFIED, exit 2 = FAILED with exact error codes)
+anchordoc verify-claim report.pdf \
+  --claim "Gross margin increased by 4.0% from FY2023 to FY2024." \
+  --operands-json '[{"name":"FY24 GM","value":40.0,"unit":"%","row_label":"Gross Margin","period":"FY2024","page":2},{"name":"FY23 GM","value":36.0,"unit":"%","row_label":"Gross Margin","period":"FY2023","page":2}]' \
+  --formula "40.0 - 36.0" --claimed-value 4.0 --claimed-unit "%"
+```
 
 ![AnchorDoc Public Benchmarks](assets/benchmark_comparison.svg)
 

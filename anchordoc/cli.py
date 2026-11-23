@@ -125,6 +125,33 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return serve_stdio(roots=roots, store_dir=args.store or None, max_file_mb=args.max_file_mb)
 
 
+def cmd_verify_claim(args: argparse.Namespace) -> int:
+    from .store import BundleStore, load_document
+    from .verify import verify_claim
+
+    store = BundleStore(args.store) if args.store else None
+    doc = load_document(args.pdf, store=store, backend=args.backend)
+    operands: list[dict[str, Any]] = []
+    if args.operands_json:
+        raw_ops = json.loads(Path(args.operands_json).read_text(encoding="utf-8")) if Path(args.operands_json).is_file() else json.loads(args.operands_json)
+        if isinstance(raw_ops, list):
+            operands = raw_ops
+    cited_pages = [int(x) for x in (args.page or [])]
+    result = verify_claim(
+        doc,
+        claim_text=args.claim or "",
+        quotes=args.quote or (),
+        formula=args.formula or "",
+        claimed_value=args.claimed_value,
+        claimed_unit=args.claimed_unit or "",
+        operands=operands,
+        cited_pages=cited_pages,
+        strict_scale=not args.loose_scale,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["verified"] else 2
+
+
 def cmd_bundle(args: argparse.Namespace) -> int:
     """Inspect or garbage-collect persistent SQLite WAL document bundles."""
     store = BundleStore(args.store or None)
@@ -182,6 +209,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_m.add_argument("--store", default="", help="Optional BundleStore directory.")
     p_m.add_argument("--max-file-mb", type=float, default=100.0)
     p_m.set_defaults(func=cmd_mcp)
+
+    p_v = sub.add_parser(
+        "verify-claim",
+        help="Independently verify any external claim (quotes, row/period/unit operands, formula) against a PDF (0 API keys).",
+    )
+    p_v.add_argument("pdf", help="Path to PDF file.")
+    p_v.add_argument("--claim", default="", help="Natural-language claim text to check (e.g. pp vs %%).")
+    p_v.add_argument("--quote", action="append", default=[], help="Verbatim quote to verify (repeatable).")
+    p_v.add_argument("--formula", default="", help="Arithmetic formula to recompute via Python AST.")
+    p_v.add_argument("--claimed-value", default=None, help="Claimed numeric answer to compare against AST recomputation.")
+    p_v.add_argument("--claimed-unit", default="", help="Claimed result unit (e.g., million, billion, %%, pp).")
+    p_v.add_argument("--operands-json", default="", help="JSON string or file path of structured operands [{name,value,unit,row_label,period,page}].")
+    p_v.add_argument("--page", action="append", type=int, default=[], help="Cited 1-based page number (repeatable).")
+    p_v.add_argument("--loose-scale", action="store_true", help="Allow implicit 1000x/1e6x unit scaling.")
+    p_v.add_argument("--store", default="", help="Optional BundleStore directory.")
+    p_v.add_argument("--backend", default="pypdfium2", choices=["pypdfium2", "pymupdf"])
+    p_v.set_defaults(func=cmd_verify_claim)
 
     p_b = sub.add_parser("bundle", help="Inspect or garbage-collect persistent SQLite WAL bundles.")
     b_sub = p_b.add_subparsers(dest="bundle_cmd", required=True)

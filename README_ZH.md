@@ -2,11 +2,12 @@
 
 # ⚓ AnchorDoc
 
-**面向 100–600 页高风险长文档的零建索引成本、无向量可核验审计引擎**
+**面向 AI Agent 的可核验长 PDF 阅读与独立复算核验引擎**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
+[![对抗核验](https://img.shields.io/badge/对抗核验%2024题-100%25%20拦截%20%7C%200%25%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v090零-api-key)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -33,9 +34,32 @@
 | 传统平铺切块 BM25 | `0.3s` · `0` 次 LLM | `33.3%` | `32.0%` | `36.6%`（图表 `0.0%`） |
 | Dense 向量 RAG（`BGE-small` ONNX） | `47.6s`（向量推理） | `39.3%` | `48.7%` | 纯图 PPT 不可读 |
 | LLM 预建树（PageIndex 风格 12 页窗口） | `11.4s` · `19.2` 次 · `33k` tok | `35.9%` *（39 题子集）* | `43.6%` *（39 题子集）* | 需逐页调 VLM |
-| **⚓ AnchorDoc（`v0.8.0`）** | **`0.33s` · `0` 次 LLM** *（热重载 `3.9ms`）* | **`85.3%`** *（数值表 `96.0%` · `auto` 路由 `84.7%`）* | **`89.3%`** *（数值表 `100%`）* | **`68.3%`** *（图表 `54.5%`）* |
+| **⚓ AnchorDoc（`v0.9.0`）** | **`0.33s` · `0` 次 LLM** *（热重载 `3.9ms`）* | **`85.3%`** *（数值表 `96.0%` · `auto` 路由 `84.7%`）* | **`89.3%`** *（数值表 `100%`）* | **`68.3%`** *（图表 `54.5%`）* |
 
-*注：上表统一使用同底座模型（`deepseek-v4-flash`, `temperature=0`）。`v0.8.0` 默认执行路径与冻结基准完全向后兼容，并叠加了 `BundleStore`、前缀 KV 缓存与 4 工具 MCP 服务端；完整逐版本与跨模型（官方 `DeepSeek-V4.1-Flash`）消融明细见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。*
+*注：上表统一使用同底座模型（`deepseek-v4-flash`, `temperature=0`）。`v0.9.0` 完整保留核心检索与裁决引擎向后兼容，并新增零 API Key 的独立外部答案复算核验层（防正负号翻转、年份错列、百万/十亿偷换与百分点混淆）；完整消融与跨模型（官方 `DeepSeek-V4.1-Flash`）明细见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。*
+
+---
+
+## 独立复算与对抗核验：拿任意外部 AI 结论来验（`v0.9.0`，零 API Key）
+
+无论你的团队用 **传统 RAG、PageIndex 还是超长上下文大模型** 生成了财报或合同结论，交付签字前都可以直接把「PDF + 外部结论」丢给 AnchorDoc 做确定性把关。普通引文检查会去掉标点，甚至把 `-12%` 当成 `12%` 放行；AnchorDoc 确定性拦截 6 大高危陷阱：
+
+- **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**：正负号翻转（`-12%` 冒充 `12%`，哪怕同页别处正好有 `+12%` 也拦截）、会计括号负数 `$(145)` / `(8.4%)` 误读为正；
+- **`PERIOD_MISMATCH`**：年份/期间错列（拿去年的数冒充今年，即使两个数都在同一页也能指出哪列取错）；
+- **`UNIT_SCALE_MISMATCH`**：百万（`in millions`）与十亿（`billions`）偷换（同时放行合法换算如 `$1,200M == $1.2B`）；
+- **`PP_VS_PCT_CONFUSION`**：把毛利率差值 `40.0% - 36.0% = 4.0 pp` 错写成 `4.0%`；
+- **`ROW_LABEL_MISMATCH` & `FORMULA_MISMATCH`**：串行抓数与 Python AST 独立重算误差。
+
+### 干净克隆 1 秒复现对抗核验微型基准（0 外网下载 · 0 API Key）
+
+```bash
+python3 benchmarks/run_adversarial_verify.py
+```
+
+| 核验器（24 题：14 个对抗陷阱 + 10 条合法正确答案） | 错答案拦截率 (↑) | 错答案漏放率 (↓) | 正确答案误拦率 (↓) | 精确错因归类 |
+|---|---:|---:|---:|---:|
+| 朴素字母数字引文与宽松数值检查 | `7.1%` (1/14) | `92.9%` (13/14) | `0.0%` (0/10) | — |
+| **⚓ AnchorDoc `v0.9.0`（`verify_claim` / `doc_verify`）** | **`100.0%` (14/14)** | **`0.0%` (0/14)** | **`0.0%` (0/10)** | **`14 / 14`** |
 
 ![AnchorDoc 公开基准对比](assets/benchmark_comparison.svg)
 

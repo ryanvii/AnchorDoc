@@ -88,20 +88,40 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "doc_verify",
-        "description": "Deterministic CiteOrDie verifier: checks verbatim quotes, localizes pages, evaluates safe AST math, and verifies operand provenance.",
+        "description": "Deterministic verifier for ANY external claim: checks sign-preserving quotes, binds operands to table rows/periods/units, detects sign flips, period/unit/pp-vs-% errors, and recomputes AST math.",
         "annotations": dict(_READONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
                 "doc_id": {"type": "string"},
+                "claim_text": {"type": "string", "default": "", "description": "Optional natural-language claim to audit (e.g. pp vs % check)."},
                 "quotes": {
                     "type": "array",
                     "items": {"oneOf": [{"type": "string"}, {"type": "object"}]},
                     "description": "Verbatim quote strings or {text, page?} objects.",
                 },
                 "formula": {"type": "string", "default": ""},
+                "claimed_value": {"type": ["number", "string"], "description": "Optional claimed numeric result to check against AST recomputation."},
+                "claimed_unit": {"type": "string", "default": "", "description": "Optional unit of claimed_value (e.g., million, billion, %, pp)."},
+                "operands": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "value": {"type": ["number", "string"]},
+                            "unit": {"type": "string"},
+                            "row_label": {"type": "string"},
+                            "period": {"type": "string"},
+                            "page": {"type": "integer"},
+                        },
+                        "required": ["value"],
+                    },
+                    "description": "Optional structured operands bound to row_label, period, and unit.",
+                },
                 "cited_pages": {"type": "array", "items": {"type": "integer"}},
+                "strict_scale": {"type": "boolean", "default": False},
             },
         },
     },
@@ -245,6 +265,11 @@ class AnchorDocMCPApp:
                 quotes=args.get("quotes") or (),
                 formula=str(args.get("formula") or ""),
                 cited_pages=args.get("cited_pages") or (),
+                claim_text=str(args.get("claim_text") or ""),
+                claimed_value=args.get("claimed_value"),
+                claimed_unit=str(args.get("claimed_unit") or ""),
+                operands=args.get("operands") or (),
+                strict_scale=bool(args.get("strict_scale", False)),
             )
         raise ValueError(f"Unknown AnchorDoc MCP tool: {name!r}")
 

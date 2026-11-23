@@ -89,20 +89,114 @@ def _norm_ws_punct(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Financial / numerical semantic normalization: preserve sign (- / + / accounting parentheses)
+# and percent/decimal structure so `-12%` NEVER verifies against `12%` and `$(500)` NEVER
+# verifies against `$500`.
+_UNICODE_MINUS_RE = re.compile(r"[\u2212\u2013\u2014\ufe63\uff0d]")
+_ACCT_NEG_RE = re.compile(
+    r"(?:(?P<curr>[$¥€£])\s*\(\s*(?P<n1>\d[\d,]*(?:\.\d+)?)\s*(?P<pct1>%?)\s*\)"
+    r"|\(\s*(?P<curr2>[$¥€£])?\s*(?P<n2>\d[\d,]*(?:\.\d+)?)\s*(?P<pct2>%)\s*\)"
+    r"|\(\s*(?P<curr3>[$¥€£])?\s*(?P<n3>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)\s*\)"
+    r"|(?<=\s)\(\s*(?P<n4>\d{2,})\s*\))"
+)
+_SIGNED_NUM_TOKEN_RE = re.compile(
+    r"(?<![a-z0-9.])(?P<sign>[+-])?\s*(?P<curr>[$¥€£])?\s*(?P<num>\d[\d,]*(?:\.\d+)?)(?P<pct>\s*%)?"
+)
+
+
+def _normalize_financial_text(text: str) -> str:
+    """Normalize unicode minus and accounting parenthetical negatives while keeping sign & %."""
+    s = _UNICODE_MINUS_RE.sub("-", text or "")
+
+    def _acct_repl(m: re.Match[str]) -> str:
+        n4 = m.group("n4")
+        if n4 is not None and 1900 <= int(n4) <= 2099:
+            return m.group(0)
+        num = (
+            m.group("n1") or m.group("n2") or m.group("n3") or n4 or ""
+        ).replace(",", "")
+        pct = m.group("pct1") or m.group("pct2") or ""
+        return f" -{num}{pct} "
+
+    s = _ACCT_NEG_RE.sub(_acct_repl, s)
+    # Remove thousands commas inside numbers so `1,200` matches `1200`
+    s = re.sub(r"(?<=\d),(?=\d{3}\b)", "", s)
+    return s
+
+
+def extract_signed_numbers(text: str) -> list[tuple[float, bool, str]]:
+    """Extract (signed_value, is_percent, raw_normalized) preserving financial signs."""
+    s = _normalize_financial_text(text)
+    out: list[tuple[float, bool, str]] = []
+    for m in _SIGNED_NUM_TOKEN_RE.finditer(s):
+        raw_num = m.group("num")
+        sign = m.group("sign") or ""
+        # Ignore hyphenated words/dates like `FY-2024` or `2024-01-01` where `-` is a separator
+        if sign == "-":
+            pos = m.start("sign")
+            if pos > 0 and s[pos - 1].isalnum():
+                sign = ""
+        pct = bool((m.group("pct") or "").strip())
+        try:
+            val = float(raw_num)
+        except ValueError:
+            continue
+        if sign == "-":
+            val = -val
+        norm_str = f"{'-' if val < 0 else ''}{raw_num}{'%' if pct else ''}"
+        out.append((val, pct, norm_str))
+    return out
+
+
+def _norm_semantic_quote(text: str) -> str:
+    """Whitespace/punctuation normalization that PRESERVES financial signs (-/+), decimals and %."""
+    s = _normalize_financial_text(text).lower()
+    # Mark explicit negative sign glued to a number (excluding hyphenated tokens like `non-gaap` or `2024-2025`)
+    def _tag_num(m: re.Match[str]) -> str:
+        sign = m.group("sign") or ""
+        pos = m.start()
+        if sign == "-" and pos > 0 and s[pos - 1].isalnum():
+            sign = ""
+        num = m.group("num")
+        pct = " pct " if (m.group("pct") or "").strip() else ""
+        sign_tok = " neg " if sign == "-" else ""
+        return f"{sign_tok}{num.replace('.', ' dot ')}{pct}"
+
+    s = _SIGNED_NUM_TOKEN_RE.sub(_tag_num, s)
+    s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _sign_compatible_in_window(quote: str, source_text: str) -> bool:
+    """Verify quote preserves exact local sign, decimal, and percent semantics in source_text.
+
+    Uses local semantic-preserving substring match so even if `+12%` appears elsewhere on the
+    same page, `Operating margin was 12%` STILL fails against `Operating margin was -12%`.
+    """
+    if not extract_signed_numbers(quote):
+        return True
+    return _norm_semantic_quote(quote) in _norm_semantic_quote(source_text)
+
+
 def verify_quote(quote: str, source_text: str, min_chars: int = 8) -> tuple[bool, float]:
     """Programmatic CiteOrDie verbatim quote verification gate.
 
+    Preserves financial sign semantics (`-12%`, `$(500)`, `(12.5%)`) and percent markers so
+    sign-flipped quotes (e.g., `12%` vs `-12%`) are strictly rejected.
+
     Returns (is_verified, overlap_ratio):
-    - Exact whitespace/punctuation-normalized substring -> (True, 1.0)
-    - Ordered ellipsis-split verbatim segments -> (True, 0.95)
-    - Paraphrased / fabricated quote -> (False, token_overlap)
+    - Exact normalized substring with intact sign/percent semantics -> (True, 1.0)
+    - Ordered ellipsis-split verbatim segments with intact signs -> (True, 0.95)
+    - Sign-flipped / paraphrased / fabricated quote -> (False, overlap)
     """
     nq = _norm_ws_punct(quote)
     ns = _norm_ws_punct(source_text)
     if len(nq) < min_chars or not ns:
         return False, 0.0
     if nq in ns:
-        return True, 1.0
+        if _sign_compatible_in_window(quote, source_text):
+            return True, 1.0
+        return False, 0.0
     parts = [p.strip() for p in re.split(r"\.\.\.|…", quote or "") if len(_norm_ws_punct(p)) >= min_chars]
     if len(parts) >= 2:
         pos = 0
@@ -110,7 +204,7 @@ def verify_quote(quote: str, source_text: str, min_chars: int = 8) -> tuple[bool
         for part in parts:
             np = _norm_ws_punct(part)
             idx = ns.find(np, pos)
-            if idx == -1:
+            if idx == -1 or not _sign_compatible_in_window(part, source_text):
                 ok = False
                 break
             pos = idx + len(np)
