@@ -30,8 +30,8 @@ _STMT_INTENT_RULES: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
         re.compile(r"statements?\s+of\s+cash\s+flows?|现金流量表", re.I),
     ),
     (
-        re.compile(r"\b(?:shareholders?'?\s+equity|stockholders?'?\s+equity|retained\s+earnings|repurchas\w*|buybacks?|dividends?)\b|股东权益|所有者权益|回购", re.I),
-        re.compile(r"statements?\s+of\s+(?:shareholders|stockholders)'?\s+equity|权益变动表", re.I),
+        re.compile(r"\b(?:shareholders?['’]?\s+equity|stockholders?['’]?\s+equity|retained\s+earnings|repurchas\w*|buy[\s-]?backs?|bought\s+back|dividends?)\b|股东权益|所有者权益|回购", re.I),
+        re.compile(r"statements?\s+of\s+(?:shareholders|stockholders)['’]?\s+equity|权益变动表", re.I),
     ),
     (
         re.compile(r"\b(?:balance\s+sheets?|total\s+assets|total\s+liabilities|long[\s-]term\s+debt|debt[\s-]to[\s-]asset|working\s+capital)\b|资产负债表|总资产|总负债", re.I),

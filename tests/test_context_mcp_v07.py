@@ -146,7 +146,7 @@ def test_outline_exposes_primary_statements_and_locate_boosts_cash_flows():
         "Item 7. Management's Discussion and Analysis\nQuarterly overview of stock repurchase program.",
         "Item 5. Market for Registrant's Common Equity\nQ4 repurchase of common stock: repurchased 10 million shares in final three months.",
         "Item 8. Financial Statements and Supplementary Data\nIndex to Consolidated Financial Statements\nConsolidated Statements of Cash Flows 5",
-        "CONSOLIDATED STATEMENTS OF SHAREHOLDERS' EQUITY\nRepurchase of common stock (405,549) (73,056)\nRetained earnings 70,400",
+        "CONSOLIDATED STATEMENTS OF SHAREHOLDERS’ EQUITY\nRepurchase of common stock (405,549) (73,056)\nRetained earnings 70,400",
         "CONSOLIDATED STATEMENTS OF CASH FLOWS\n(In millions)\nOperating activities: Net income 59,531\nFinancing activities:\nRepurchases of common stock (72,738)",
         "Note 6 - Shareholders' Equity\nDuring 2018 the company repurchased 405.5 million shares for $73.1 billion.",
         "PART IV\nExhibits and schedules regarding common stock repurchase authorizations and shares.",
@@ -158,15 +158,16 @@ def test_outline_exposes_primary_statements_and_locate_boosts_cash_flows():
     out = ctx.outline(depth=1, max_items=20)
     by_page = {it["p"]: it for it in out["items"]}
     # Page 3 Item 8 refreshes section_path; Pages 4 & 5 surface as tier=1 with real statement titles!
-    assert 4 in by_page and "SHAREHOLDERS' EQUITY" in by_page[4]["title"]
+    assert 4 in by_page and "SHAREHOLDERS’ EQUITY" in by_page[4]["title"]
     assert 5 in by_page and "CASH FLOWS" in by_page[5]["title"]
     assert "Item 8" in by_page[5]["title"]
 
-    loc = ctx.locate(
+    for q in (
         "In FY2018, how much cash did the company actually spend to repurchase common stock, and how many shares were repurchased?",
-        k=5,
-    )
-    top_pages = [h["p"] for h in loc["hits"]]
-    assert 5 in top_pages[:3], f"Expected Cash Flows page 5 in top-3, got {top_pages}"
-    assert 4 in top_pages, f"Expected Equity page 4 in top-5, got {top_pages}"
+        "How much cash did the company spend to buy back stock in 2018?",
+    ):
+        loc = ctx.locate(q, k=5)
+        top_pages = [h["p"] for h in loc["hits"]]
+        assert 5 in top_pages[:3], f"Expected Cash Flows page 5 in top-3 for {q!r}, got {top_pages}"
+        assert 4 in top_pages[:3], f"Expected Equity page 4 in top-3 for {q!r}, got {top_pages}"
 

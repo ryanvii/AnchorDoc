@@ -14,7 +14,7 @@ _HEADING_RE = re.compile(
 )
 _TABLE_CUE_RE = re.compile(
     r"(?:consolidated\s+(?:statements?|balance\s+sheets?)|cash\s+flows?|operations|income|"
-    r"shareholders'?\s+equity|segment|revenue|operating\s+income|capital\s+expenditures?|"
+    r"shareholders['’]?\s+equity|segment|revenue|operating\s+income|capital\s+expenditures?|"
     r"long-term\s+debt|summary\s+of\s+financial\s+performance|schedule\s+\w+|table\s+\d+|"
     r"偏离表|报价表|一览表|明细表|索引表|财务报表|审计报告)",
     re.I,
