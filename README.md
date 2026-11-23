@@ -2,12 +2,12 @@
 
 # ⚓ AnchorDoc
 
-**Verifiable Long-PDF Reading & Independent Claim Verification Engine for AI Agents**
+**Let AI Agents Read Long PDFs on Demand — Locate Cross-Page Evidence & Verify Every Claim**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
-[![Adversarial Verify](https://img.shields.io/badge/Adversarial%20Verify%2028q-100%25%20Catch%20%7C%200%25%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v091)
+[![Synthetic Regression](https://img.shields.io/badge/Synthetic%20Regression%2031q-20%2F20%20Blocked%20%7C%200%2F11%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v092)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -19,7 +19,19 @@
 
 ---
 
-**AnchorDoc** replaces brittle chunk-based Vector RAG and expensive upfront LLM tree-indexing with a **0.3s Zero-LLM Structural Anchor Map**, **Query-Aware Single-Shot Evidence Locator** (preserving full pages + continuation tables + printed-page labels), **Selective VisionPageCards + 2×2 Adaptive High-Res Zoom**, and **Reasoning-First Deterministic Adjudication** (authoritative Python AST math, operand provenance, tri-state visual evidence gate, and two-stage logic NLI truth tables).
+**AnchorDoc** lets AI agents read long documents on demand to find the exact evidence needed to answer a question. It uses document structure, printed page numbers, and tables to locate relevant passages, keeps digging when evidence is insufficient, and lets every quote and calculation be traced back to the source page.
+
+> **Why chunk-based RAG breaks on real 100–600 page PDFs:** Suppose you ask an agent *"Did FY2024 Gross Margin expand after excluding one-time restructuring charges?"* The headline narrative is on Page 1, the multi-year income statement is on Page 2 (with FY2024, FY2023, and FY2022 columns), and the restructuring footnote is on Page 3. Flat chunking splits tables from headers and misses follow-up pages; stuffing the whole PDF causes attention decay and silent year-column swaps. AnchorDoc builds a **0.3s Zero-LLM Structural Anchor Map**, locates cross-page evidence + continuation tables on demand, zooms into charts/scans selectively, and verifies quotes, cell bindings, and Python AST recomputations deterministically.
+
+### Try It in 10 Seconds (Clean Clone, 0 Downloads, 0 API Keys)
+
+```bash
+git clone https://github.com/ryanvii/AnchorDoc.git && cd AnchorDoc
+pip install -e .
+python3 examples/quickstart_verify.py
+```
+
+In one run, AnchorDoc locates the income statement on a built-in 3-page filing in `<5ms`, verifies a cell-bound FY2024 Gross Profit formula (`rev - cogs = 480` → `VERIFIED`), and then catches a subtle **same-page year-column swap** (`378` is FY2023, not FY2024 → `FAILED [PERIOD_MISMATCH]`).
 
 ![AnchorDoc Demo Preview](assets/demo_preview.gif)
 
@@ -36,33 +48,35 @@
 | Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | `36.6%` (`0.0%` Chart/Fig) |
 | Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind to pure-image slides |
 | LLM Tree-Index (PageIndex-style 12p win) | `11.4s` · `19.2` calls · `33k` tok | `35.9%` *(39q subset)* | `43.6%` *(39q subset)* | Requires VLM per page |
-| **⚓ AnchorDoc (`v0.9.0`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
+| **⚓ AnchorDoc (`v0.9.2`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
 
-*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Retrieval/adjudication benchmarks reflect frozen milestone runs preserved backward-compatibly in `v0.9.0`, while `v0.9.0` hardens sign/period/unit/pp-vs-% verification and adds zero-API-key independent claim verification; complete ablations and cross-model (`DeepSeek-V4.1-Flash`) tables are in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
+*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Retrieval/adjudication benchmarks reflect frozen milestone runs preserved backward-compatibly in `v0.9.x`, while `v0.9.0–v0.9.2` add and harden zero-API-key independent claim verification; complete ablations and cross-model (`DeepSeek-V4.1-Flash`) tables are in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
 
 ---
 
-## Independent Claim Verification: Verify ANY AI Answer (`v0.9.1`, Zero API Key)
+## Independent Claim Verification: Verify ANY AI Answer (`v0.9.2`, Zero API Key)
 
 Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an external claim (quotes, operands bound to row/period/unit, and symbolic or numeric formula) to AnchorDoc **before signing off**. Every report states explicitly **what was verified** (`checks: {quotes, operands, computation, claim_alignment}` + `verified_scope`) with a 4-state verdict (`VERIFIED` | `PARTIALLY_VERIFIED` | `FAILED` | `UNVERIFIED`):
 
 - **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**: `-12%` vs `12%`, accounting parentheses `$(145)` vs `$145` (even when `+12%` exists elsewhere on the same page)
-- **`PERIOD_MISMATCH`**: value exists on the row/page, but came from `FY2023` while claiming `FY2024`
+- **`PERIOD_MISMATCH` / `CLAIM_PERIOD_MISMATCH`**: catches both cell-level column swaps (`378` is `FY2023` while claiming `FY2024`) and claim-level period swaps (valid `FY2024` operands & math `480`, but claim text mislabels it as `FY2023`)
 - **`UNIT_SCALE_MISMATCH`**: `in millions` vs `billions` confusion (while passing valid `$1,200M == $1.2B` conversions)
 - **`PP_VS_PCT_CONFUSION`**: margin difference `40.0% - 36.0% = 4.0 pp` mislabeled as `4.0%`
-- **`FORMULA_OPERAND_UNBOUND`** (anti-laundering): supports direct symbolic formulas (`rev - cogs`) and rejects any numeric literal/symbol in `formula` not bound to a verified cell operand (blocks valid `[1200, 720]` operands masking `1200 - 700 = 500`)
-- **`CLAIM_UNSUPPORTED_BY_EVIDENCE`** (scoped honesty): attaching a true-but-irrelevant verbatim quote to an unverified numeric claim returns `PARTIALLY_VERIFIED` (`quotes=verified`, `claim_alignment=unverified`), **never** `VERIFIED`
+- **`FORMULA_OPERAND_UNBOUND`** (anti-laundering): supports symbolic formulas (`rev - cogs`) and rejects **any** unbound variable or numeric literal — including mixed formulas like `rev - 700` where valid `rev=1200, cogs=720` operands were attached
+- **`CLAIM_UNSUPPORTED_BY_EVIDENCE` / `CLAIM_ENTAILMENT_NOT_CHECKED`** (scoped honesty): in quote-only mode, a verbatim quote confirms the quote itself (`quotes=verified`), **never** the whole free-text claim — blocking both irrelevant quotes and same-number metric swaps (e.g. claiming `"FY2024 Gross Margin is 65.0%"` with a `"Debt-to-Asset <= 65.0%"` covenant quote) from receiving `VERIFIED`
 
-### Run the Clean-Clone Adversarial Mini-Bench in 1 Second (0 Downloads, 0 API Keys)
+### Run the Clean-Clone Synthetic Regression Suite in 1 Second (0 Downloads, 0 API Keys)
 
 ```bash
 python3 benchmarks/run_adversarial_verify.py
 ```
 
-| Verifier (28 Cases: 17 Adversarial Traps + 11 Valid Claims) | Trap Catch Rate (↑) | False-Pass Rate (↓) | False-Alarm Rate (↓) | Exact Error Diagnosis |
-|---|---:|---:|---:|---:|
-| Naive Alphanumeric Citation & Loose Number Check | `11.8%` (2/17) | `88.2%` (15/17) | `9.1%` (1/11) | — |
-| **⚓ AnchorDoc `v0.9.1` (`verify_claim` / `doc_verify`)** | **`100.0%` (17/17)** | **`0.0%` (0/17)** | **`0.0%` (0/11)** | **`17 / 17`** |
+| Verifier (31 Synthetic Cases: 20 Adversarial Traps + 11 Valid Claims) | Non-Verified Traps (↑) | Verdict Split on Traps | False-Pass (↓) | False-Alarm (↓) | Exact Diagnosis |
+|---|---:|---|---:|---:|---:|
+| Naive Alphanumeric Citation & Loose Number Check | `20.0%` (4/20) | `4 FAILED` | `80.0%` (16/20) | `9.1%` (1/11) | — |
+| **⚓ AnchorDoc `v0.9.2` (`verify_claim` / `doc_verify`)** | **`20 / 20`** | **`18 FAILED` + `2 PARTIALLY_VERIFIED`** | **`0 / 20`** | **`0 / 11`** | **`20 / 20`** |
+
+*\*Note: This 31-case suite is a deterministic synthetic regression benchmark covering specific known failure classes (sign flip, year swap, unit swap, pp-vs-%, formula laundering, metric swap); it verifies those regressions cleanly rather than estimating a statistical false-pass rate on arbitrary unseen filings.*
 
 ```bash
 # Verify any external AI claim with cell-bound symbolic formula (exit 0 = VERIFIED, exit 2 = FAILED / PARTIAL)
@@ -202,6 +216,17 @@ AnchorDoc shares the exact same **zero-vector, zero-server-LLM, token-budgeted p
 
 ---
 
+## Roadmap: Evidence Sufficiency (`v1.0`)
+
+Beyond zero-index retrieval and deterministic claim verification, AnchorDoc's long-term north-star research problem is **Evidence Sufficiency**:
+
+> *How does a long-document system know when the context it retrieved is truly sufficient to answer — and when it must read one more page before committing?*
+
+- **Current (`v0.9.2`)**: Zero-LLM AnchorMap, continuation-table expansion, conditional gap-followup (`B42`), tri-state visual gate (`stated | derivable | absent`), and cell-bound verification (`VERIFIED | PARTIALLY_VERIFIED | FAILED | UNVERIFIED`).
+- **Next (`v1.0`)**: Closed-loop **sufficiency-driven reading** — when the verifier detects a missing comparative period, undefined adjusted-metric footnote, or unresolved cross-reference, the agent automatically triggers a targeted follow-up page read and revises its answer before emitting a final verdict.
+
+---
+
 ## Citation
 
 If you use AnchorDoc or its reproducible benchmarks in your work, please cite via [CITATION.cff](CITATION.cff):
@@ -211,7 +236,7 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost Long-Document Context Engineering with Falsifiable Evidence Chains},
   year    = {2026},
-  version = {0.8.0},
+  version = {0.9.2},
   doi     = {10.5281/zenodo.24453581},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}

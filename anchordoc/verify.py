@@ -149,27 +149,32 @@ def _extract_periods_in_line(line: str) -> list[str]:
 def _safe_eval_bound_formula(
     formula: str,
     symbol_map: dict[str, float],
-) -> tuple[float | None, list[str]]:
-    """Safely evaluate an arithmetic AST expression that may reference bound operand names.
+) -> tuple[float | None, list[str], list[tuple[str, float]]]:
+    """Safely evaluate an arithmetic AST expression that may mix bound symbols and numeric literals.
 
-    Returns ``(value, unbound_symbols)``. Never uses ``eval()``.
+    Returns ``(value, unbound_symbols, numeric_literals)`` where ``numeric_literals`` captures every
+    signed numeric constant in the AST so mixed formulas like ``rev - 700`` cannot smuggle unbound
+    numbers past operand verification. Never uses ``eval()``.
     """
     expr = (formula or "").strip()
     if not expr:
-        return None, []
+        return None, [], []
     expr = re.sub(r"(?<=\d),(?=\d{3}\b)", "", expr)
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:
-        return None, []
+        return None, [], []
 
     unbound: list[str] = []
+    literals: list[tuple[str, float]] = []
 
     def _eval(node: ast.AST) -> float:
         if isinstance(node, ast.Expression):
             return _eval(node.body)
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-            return float(node.value)
+            v = float(node.value)
+            literals.append((str(node.value), v))
+            return v
         if isinstance(node, ast.Name):
             if node.id in symbol_map:
                 return float(symbol_map[node.id])
@@ -177,6 +182,10 @@ def _safe_eval_bound_formula(
                 unbound.append(node.id)
             return 0.0
         if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+            if isinstance(node.op, ast.USub) and isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, (int, float)) and not isinstance(node.operand.value, bool):
+                v = -float(node.operand.value)
+                literals.append((f"-{node.operand.value}", v))
+                return v
             return float(_UNARY_OPS[type(node.op)](_eval(node.operand)))
         if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
             left = _eval(node.left)
@@ -191,10 +200,10 @@ def _safe_eval_bound_formula(
     try:
         val = _eval(tree)
     except Exception:
-        return None, unbound
+        return None, unbound, literals
     if unbound:
-        return None, unbound
-    return val, []
+        return None, unbound, literals
+    return val, [], literals
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +704,7 @@ def verify_claim(
             if res.get("matched_page") and res["matched_page"] not in scope_pages:
                 scope_pages.append(res["matched_page"])
 
-    # 3. Formula AST recomputation & STRICT operand binding (no evidence laundering!)
+    # 3. Formula AST recomputation & STRICT operand binding (symbols AND numeric literals!)
     calc_val: float | None = None
     formula_ops_ok = True
     ungrounded_ops: list[str] = []
@@ -703,7 +712,7 @@ def verify_claim(
 
     if formula:
         if has_symbolic_vars:
-            calc_val, unbound_syms = _safe_eval_bound_formula(formula, verified_op_symbols)
+            calc_val, unbound_syms, ast_literals = _safe_eval_bound_formula(formula, verified_op_symbols)
             if unbound_syms:
                 formula_ops_ok = False
                 ungrounded_ops.extend(unbound_syms)
@@ -713,6 +722,22 @@ def verify_claim(
                 )
             elif calc_val is None:
                 _add_err("INVALID_FORMULA", f"Cannot evaluate symbolic formula {formula!r} via Python AST.")
+
+            # ALSO check every non-trivial numeric literal inside a mixed formula (e.g., `rev - 700`)!
+            if ast_literals:
+                unbound_lits: list[str] = []
+                for raw_lit, lv in ast_literals:
+                    if abs(lv) in _TRIVIAL_CONSTANTS:
+                        continue
+                    if not any(_nums_close(lv, bv) for bv in verified_op_values):
+                        unbound_lits.append(raw_lit)
+                if unbound_lits:
+                    formula_ops_ok = False
+                    ungrounded_ops.extend(unbound_lits)
+                    _add_err(
+                        "FORMULA_OPERAND_UNBOUND",
+                        f"Mixed formula {formula!r} uses unbound numeric literal(s) {unbound_lits} not bound to any verified operand ({verified_op_values}).",
+                    )
         else:
             calc_val = safe_calc(formula)
             if calc_val is None:
@@ -720,8 +745,6 @@ def verify_claim(
 
             # ALWAYS check every numeric operand in formula!
             if operand_results:
-                # Strict binding against the verified structured operands: prevents passing
-                # valid operands [1200, 720] while sneaking `1200 - 700 = 500` in formula!
                 for raw_op, ov in _formula_signed_operands(formula):
                     if abs(ov) in _TRIVIAL_CONSTANTS:
                         continue
@@ -769,46 +792,87 @@ def verify_claim(
     if pp_err:
         _add_err("PP_VS_PCT_CONFUSION", pp_err)
 
-    # 5. Claim-to-Evidence Alignment Check: prevent irrelevant verbatim quote from granting VERIFIED
-    # to an unverified numeric claim (e.g., claim="Gross profit is 500" + quote about 65% debt covenant).
+    # 5. Claim-to-Evidence Alignment Check (Scoped Honesty Contract):
+    # - Check fiscal period consistency between claim_text and bound operands (catches FY2023 claim on FY2024 math!).
+    # - In quote-only mode (no bound operands / formula), NEVER grant VERIFIED to a free-text claim
+    #   merely because a number like `65%` appears in both sentences (prevents metric/meaning confusion
+    #   such as "Gross Margin is 65%" verified by "Debt-to-Asset Ratio <= 65%").
     claim_alignment_status = "not_checked"
     if claim_text.strip():
-        claim_nums = _extract_non_year_claim_numbers(claim_text)
-        if claim_nums:
-            substantiated_nums: list[float] = list(verified_op_values)
-            if calc_val is not None and not error_codes:
-                substantiated_nums.append(calc_val)
-                # Also include percent-scaled form if unit is percent
-                cu = normalize_unit(claimed_unit)
-                if cu and cu[0] == "percent" and abs(calc_val) < 1.0:
-                    substantiated_nums.append(calc_val * 100.0)
-            for qr in quote_results:
-                if qr["verified"]:
-                    for qv, _, _ in extract_signed_numbers(qr["text"]):
-                        substantiated_nums.append(qv)
+        # 5a. Period consistency check against bound operands
+        claim_periods = _extract_periods_in_line(claim_text)
+        bound_periods = [
+            _norm_period(str(op.get("period") or ""))
+            for op in operand_results
+            if op.get("verified") and str(op.get("period") or "").strip()
+        ]
+        period_conflict = False
+        if claim_periods and bound_periods:
+            missing_periods = [cp for cp in claim_periods if cp not in bound_periods]
+            if missing_periods:
+                period_conflict = True
+                claim_alignment_status = "failed"
+                _add_err(
+                    "CLAIM_PERIOD_MISMATCH",
+                    f"Claim references period(s) {missing_periods}, but verified bound operands only cover {sorted(set(bound_periods))}.",
+                )
 
-            unsubstantiated = [
-                cn for cn in claim_nums
-                if not any(_nums_close(cn, sn) for sn in substantiated_nums)
-            ]
-            if unsubstantiated:
+        if not period_conflict:
+            claim_nums = _extract_non_year_claim_numbers(claim_text)
+            if not operand_results and not formula:
+                # Quote-only mode: quote existence proves the quote is verbatim, NOT that the
+                # free-text claim's metric/subject/polarity matches the quote semantically.
                 claim_alignment_status = "unverified"
-                _add_warn(
-                    "CLAIM_UNSUPPORTED_BY_EVIDENCE",
-                    f"Claim asserts number(s) {unsubstantiated} that are NOT substantiated by any verified quote, bound operand, or recomputed formula.",
-                )
+                if claim_nums:
+                    quote_nums: list[float] = []
+                    for qr in quote_results:
+                        if qr["verified"]:
+                            for qv, _, _ in extract_signed_numbers(qr["text"]):
+                                quote_nums.append(qv)
+                    unsubstantiated = [
+                        cn for cn in claim_nums
+                        if not any(_nums_close(cn, qn) for qn in quote_nums)
+                    ]
+                    if unsubstantiated:
+                        _add_warn(
+                            "CLAIM_UNSUPPORTED_BY_EVIDENCE",
+                            f"Claim asserts number(s) {unsubstantiated} not present in any verified quote.",
+                        )
+                    else:
+                        _add_warn(
+                            "CLAIM_ENTAILMENT_NOT_CHECKED",
+                            "Quote(s) verified verbatim, but free-text metric/meaning alignment is not verified without structured cell operands or semantic NLI.",
+                        )
+                elif quote_results:
+                    _add_warn(
+                        "CLAIM_ENTAILMENT_NOT_CHECKED",
+                        "Quote(s) verified verbatim, but semantic entailment of the free-text claim is not verified deterministically.",
+                    )
             else:
-                claim_alignment_status = "verified"
-        else:
-            # Qualitative claim with only quote(s) — quote existence alone does not prove semantic entailment
-            if quote_results and not operand_results and not formula:
-                claim_alignment_status = "unverified"
-                _add_warn(
-                    "CLAIM_ENTAILMENT_NOT_CHECKED",
-                    "Quote(s) verified verbatim, but semantic entailment of the free-text claim is not verified deterministically.",
-                )
-            elif operand_results or formula:
-                claim_alignment_status = "verified"
+                # Structured operand / formula mode: check every numeric assertion in claim_text
+                substantiated_nums: list[float] = list(verified_op_values)
+                if calc_val is not None and not error_codes:
+                    substantiated_nums.append(calc_val)
+                    cu = normalize_unit(claimed_unit)
+                    if cu and cu[0] == "percent" and abs(calc_val) < 1.0:
+                        substantiated_nums.append(calc_val * 100.0)
+                for qr in quote_results:
+                    if qr["verified"]:
+                        for qv, _, _ in extract_signed_numbers(qr["text"]):
+                            substantiated_nums.append(qv)
+
+                unsubstantiated = [
+                    cn for cn in claim_nums
+                    if not any(_nums_close(cn, sn) for sn in substantiated_nums)
+                ]
+                if unsubstantiated:
+                    claim_alignment_status = "unverified"
+                    _add_warn(
+                        "CLAIM_UNSUPPORTED_BY_EVIDENCE",
+                        f"Claim asserts number(s) {unsubstantiated} that are NOT substantiated by any verified quote, bound operand, or recomputed formula.",
+                    )
+                else:
+                    claim_alignment_status = "verified"
 
     # 6. Per-layer structured status & Scoped Verdict
     quotes_status = (

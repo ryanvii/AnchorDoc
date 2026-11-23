@@ -161,3 +161,57 @@ def test_scoped_honesty_blocks_evidence_laundering_and_irrelevant_quote(tmp_path
     assert sym["checks"]["claim_alignment"] == "verified"
     assert set(sym["verified_scope"]) == {"operands", "computation", "claim_alignment"}
 
+
+def test_v092_redteam_mixed_formula_metric_swap_and_claim_period(tmp_path: Path):
+    """Exact regression tests for the 3 red-team escape cases in v0.9.2:
+    1. Mixed formula `rev - 700 = 500` with bound `rev=1200, cogs=720` -> FAILED (`FORMULA_OPERAND_UNBOUND`).
+    2. `FY2024 Gross Margin is 65.0%` + Debt Covenant `<= 65.0%` quote -> PARTIALLY_VERIFIED (NOT VERIFIED!).
+    3. FY2024 bound math `rev - cogs = 480` + claim text saying `FY2023` -> FAILED (`CLAIM_PERIOD_MISMATCH`).
+    """
+    pdf = build_sample_filing_pdf(tmp_path / "filing.pdf")
+    doc = PdfDocument.from_pdf(pdf)
+
+    # 1. Mixed symbol + unbound literal
+    mixed = verify_claim(
+        doc,
+        operands=[
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        formula="rev - 700",
+        claimed_value=500,
+        claimed_unit="million",
+    )
+    assert mixed["verdict"] == "FAILED"
+    assert mixed["verified"] is False
+    assert "FORMULA_OPERAND_UNBOUND" in mixed["error_codes"]
+
+    # 2. Same number (65.0%) but different metric/meaning in quote-only mode -> NEVER VERIFIED
+    metric_swap = verify_claim(
+        doc,
+        claim_text="FY2024 Gross Margin is 65.0%.",
+        quotes=[{"text": "Debt-to-Asset Ratio shall not exceed 65.0% at fiscal year-end.", "page": 3}],
+    )
+    assert metric_swap["verdict"] == "PARTIALLY_VERIFIED"
+    assert metric_swap["verified"] is False
+    assert metric_swap["checks"]["quotes"] == "verified"
+    assert metric_swap["checks"]["claim_alignment"] == "unverified"
+
+    # 3. FY2024 bound operands + FY2023 stated in claim_text -> CLAIM_PERIOD_MISMATCH
+    year_swap = verify_claim(
+        doc,
+        claim_text="FY2023 Gross Profit is 480 million.",
+        operands=[
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        formula="rev - cogs",
+        claimed_value=480,
+        claimed_unit="million",
+    )
+    assert year_swap["verdict"] == "FAILED"
+    assert year_swap["verified"] is False
+    assert "CLAIM_PERIOD_MISMATCH" in year_swap["error_codes"]
+    assert year_swap["checks"]["claim_alignment"] == "failed"
+
+

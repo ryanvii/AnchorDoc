@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anchordoc"
-version = "0.9.1"
-description = "Zero-index-cost, vectorless document auditing engine for 100-600 page PDFs and high-stakes compliance documents."
+version = "0.9.2"
+description = "Structured long-PDF retrieval, cross-page evidence localization, quote verification, and auditable numerical recomputation for AI agents."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

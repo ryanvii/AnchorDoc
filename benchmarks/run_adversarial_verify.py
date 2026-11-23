@@ -353,6 +353,44 @@ CASES: list[dict[str, Any]] = [
         "claimed_value": 500,
         "claimed_unit": "million",
     },
+    {
+        "id": "ADV-18",
+        "category": "mixed_formula_laundering",
+        "description": "Mixed formula laundering: bound `rev=1200, cogs=720`, formula sneaks `rev - 700 = 500`!",
+        "expected_verified": False,
+        "expected_error": "FORMULA_OPERAND_UNBOUND",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - 700",
+        "claimed_value": 500,
+        "claimed_unit": "million",
+    },
+    {
+        "id": "ADV-19",
+        "category": "metric_meaning_mismatch",
+        "description": "Same-number metric swap: claims `FY2024 Gross Margin is 65.0%` using Debt Covenant `<= 65.0%` quote!",
+        "expected_verified": False,
+        "expected_error": "CLAIM_ENTAILMENT_NOT_CHECKED",
+        "claim_text": "FY2024 Gross Margin is 65.0%.",
+        "quotes": [{"text": "Debt-to-Asset Ratio shall not exceed 65.0% at fiscal year-end.", "page": 3}],
+    },
+    {
+        "id": "ADV-20",
+        "category": "claim_period_mismatch",
+        "description": "Claim period swap: FY2024 rev/cogs compute 480 accurately, but claim text labels it `FY2023`!",
+        "expected_verified": False,
+        "expected_error": "CLAIM_PERIOD_MISMATCH",
+        "claim_text": "FY2023 Gross Profit is 480 million.",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - cogs",
+        "claimed_value": 480,
+        "claimed_unit": "million",
+    },
     # --- 11 VALID GROUND-TRUTH CLAIMS (expected_verified = True; measures False-Alarm Rate) ---
     {
         "id": "VAL-01",
@@ -479,6 +517,8 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
         ad_false_pass = 0
         ad_false_alarm = 0
         ad_exact_error = 0
+        ad_failed_count = 0
+        ad_partial_count = 0
         details: list[dict[str, Any]] = []
 
         for c in CASES:
@@ -502,6 +542,10 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
                 if a_ok:
                     ad_false_pass += 1
                 else:
+                    if ad_res["verdict"] == "FAILED":
+                        ad_failed_count += 1
+                    elif ad_res["verdict"] == "PARTIALLY_VERIFIED":
+                        ad_partial_count += 1
                     all_codes = list(ad_res.get("error_codes") or []) + list(ad_res.get("warning_codes") or [])
                     if c.get("expected_error") in all_codes:
                         ad_exact_error += 1
@@ -526,7 +570,7 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
             })
 
     summary = {
-        "benchmark": "AnchorDoc v0.9.1 Adversarial Financial Verification Mini-Bench (0 API keys)",
+        "benchmark": "AnchorDoc v0.9.2 Synthetic Adversarial Verification Regression (31 cases, 0 API keys)",
         "total_cases": len(CASES),
         "adversarial_traps": len(traps),
         "valid_claims": len(valids),
@@ -539,6 +583,9 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
         },
         "anchordoc_v09": {
             "trap_catch_rate_%": round((len(traps) - ad_false_pass) / len(traps) * 100, 1),
+            "non_verified_count": len(traps) - ad_false_pass,
+            "hard_failed_count": ad_failed_count,
+            "partially_verified_count": ad_partial_count,
             "false_pass_rate_%": round(ad_false_pass / len(traps) * 100, 1),
             "false_pass_count": ad_false_pass,
             "exact_error_code_match": f"{ad_exact_error}/{len(traps)}",
@@ -554,7 +601,7 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run AnchorDoc v0.9.0 Adversarial Verification Mini-Bench (0 API keys).")
+    ap = argparse.ArgumentParser(description="Run AnchorDoc v0.9.2 Adversarial Verification Regression Suite (0 API keys).")
     ap.add_argument("--out", default="", help="Optional path to save JSON results.")
     args = ap.parse_args()
     res = run_benchmark(Path(args.out) if args.out else None)
@@ -562,14 +609,20 @@ def main() -> int:
     ad = res["anchordoc_v09"]
     print(f"\n=== {res['benchmark']} ===")
     print(f"Cases: {res['total_cases']} ({res['adversarial_traps']} adversarial traps + {res['valid_claims']} valid claims)")
-    print(f"Naive Citation/Number Check -> Catch Rate: {nv['trap_catch_rate_%']:5.1f}% | False-Pass: {nv['false_pass_rate_%']:5.1f}% ({nv['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {nv['false_alarm_rate_%']:5.1f}%")
-    print(f"AnchorDoc v0.9.1 Verifier   -> Catch Rate: {ad['trap_catch_rate_%']:5.1f}% | False-Pass: {ad['false_pass_rate_%']:5.1f}% ({ad['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {ad['false_alarm_rate_%']:5.1f}% | Exact Diag: {ad['exact_error_code_match']}")
+    print(f"Naive Citation/Number Check -> Non-Verified: {nv['trap_catch_rate_%']:5.1f}% | False-Pass: {nv['false_pass_rate_%']:5.1f}% ({nv['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {nv['false_alarm_rate_%']:5.1f}%")
+    print(
+        f"AnchorDoc v0.9.2 Verifier   -> Blocked: {ad['non_verified_count']}/{res['adversarial_traps']} "
+        f"({ad['hard_failed_count']} FAILED + {ad['partially_verified_count']} PARTIALLY_VERIFIED) | "
+        f"False-Pass: {ad['false_pass_count']}/{res['adversarial_traps']} | "
+        f"False-Alarm: {ad['false_alarm_count']}/{res['valid_claims']} | Exact Diag: {ad['exact_error_code_match']}"
+    )
     print("\nPer-case breakdown:")
     for d in res["details"]:
         tag = "TRAP " if not d["expected_verified"] else "VALID"
         n_mark = "PASS" if d["naive_verified"] else "FAIL"
-        a_mark = "PASS" if d["anchordoc_verified"] else f"CATCH {d['anchordoc_errors']}"
-        print(f"  [{d['id']}] ({tag}) Naive={n_mark:4s} | AnchorDoc={a_mark:34s} | {d['description']}")
+        verdict = d.get("anchordoc_verdict", "VERIFIED" if d["anchordoc_verified"] else "FAILED")
+        a_mark = verdict if d["anchordoc_verified"] else f"{verdict} {d['anchordoc_errors']}"
+        print(f"  [{d['id']}] ({tag}) Naive={n_mark:4s} | AnchorDoc={a_mark:44s} | {d['description']}")
     return 0 if (ad["false_pass_count"] == 0 and ad["false_alarm_count"] == 0) else 1
 
 
