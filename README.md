@@ -33,10 +33,9 @@
 | Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | `36.6%` (`0.0%` Chart/Fig) |
 | Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind to pure-image slides |
 | LLM Tree-Index (PageIndex-style 12p win) | `11.4s` · `19.2` calls · `33k` tok | `35.9%` *(39q subset)* | `43.6%` *(39q subset)* | Requires VLM per page |
-| AnchorDoc `v0.5` | `0.32s` · `0` LLM calls | `78.7%` (`90.0%` numerical) | `81.3%` (`100%` numerical) | `52.5%` (`24.2%` Chart/Fig) |
-| **⚓ AnchorDoc `v0.6`** | **`0.33s` · `0` LLM calls** | **`85.3%` (`96.0%` numerical)** | **`89.3%` (`100%` numerical)** | **`67.3%` (`48.5%` Chart/Fig, 2.0×)** |
+| **⚓ AnchorDoc (`v0.8.0`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
 
-*\*All methods benchmarked on the exact same base model (`deepseek-v4-flash`, `temperature=0`) with Apache-2.0 `pypdfium2`.*
+*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Core engine paths in `v0.8.0` remain backward-compatible with frozen benchmark runs (`navigate` / `auto` / `full_pool`) while adding `BundleStore`, prefix-stable KV caching, and the 4-tool MCP server; complete per-version and cross-model (`DeepSeek-V4.1-Flash`) ablations are logged in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
 
 ![AnchorDoc Public Benchmarks](assets/benchmark_comparison.svg)
 
