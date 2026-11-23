@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
-[![Synthetic Regression](https://img.shields.io/badge/Synthetic%20Regression%2031q-20%2F20%20Blocked%20%7C%200%2F11%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v092)
+[![Synthetic Regression](https://img.shields.io/badge/Synthetic%20Regression%2033q-22%2F22%20Blocked%20%7C%200%2F11%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v093)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -21,9 +21,9 @@
 
 **AnchorDoc** lets AI agents read long documents on demand to find the exact evidence needed to answer a question. It uses document structure, printed page numbers, and tables to locate relevant passages, keeps digging when evidence is insufficient, and lets every quote and calculation be traced back to the source page.
 
-> **Why chunk-based RAG breaks on real 100–600 page PDFs:** Suppose you ask an agent *"Did FY2024 Gross Margin expand after excluding one-time restructuring charges?"* The headline narrative is on Page 1, the multi-year income statement is on Page 2 (with FY2024, FY2023, and FY2022 columns), and the restructuring footnote is on Page 3. Flat chunking splits tables from headers and misses follow-up pages; stuffing the whole PDF causes attention decay and silent year-column swaps. AnchorDoc builds a **0.3s Zero-LLM Structural Anchor Map**, locates cross-page evidence + continuation tables on demand, zooms into charts/scans selectively, and verifies quotes, cell bindings, and Python AST recomputations deterministically.
+> **The moment AnchorDoc is built for:** Ask *"Did FY2024 Gross Margin expand vs FY2023 after excluding one-time restructuring charges?"* On Round 1, reading the MD&A (Page 1) and Income Statement (Page 2) shows Reported GAAP Gross Margin rose from `36.0%` to `40.0%` (**`+4.0 pp` — looks like YES**). Instead of stopping there, AnchorDoc's Sufficiency Gate detects an unresolved cross-reference (`See Note 7`) needed to know how much restructuring was booked inside Cost of Goods Sold, issues a targeted Round-2 read of **Page 6 (`Note 7`)**, recomputes Adjusted Gross Margin across Page 2 + Page 6 cells (`46.0% → 41.0%`), and **flips the answer to NO (`-5.0 pp` contraction)** — or, if `Note 7` is removed from the PDF, explicitly returns `PARTIALLY_VERIFIED` (`GAAP +4.0 pp verified; adjusted margin has INSUFFICIENT_EVIDENCE`).
 
-### Try It in 10 Seconds (Clean Clone, 0 Downloads, 0 API Keys)
+### Try That Exact Moment in 10 Seconds (Clean Clone, 0 Downloads, 0 API Keys)
 
 ```bash
 git clone https://github.com/ryanvii/AnchorDoc.git && cd AnchorDoc
@@ -31,7 +31,9 @@ pip install -e .
 python3 examples/quickstart_verify.py
 ```
 
-In one run, AnchorDoc locates the income statement on a built-in 3-page filing in `<5ms`, verifies a cell-bound FY2024 Gross Profit formula (`rev - cogs = 480` → `VERIFIED`), and then catches a subtle **same-page year-column swap** (`378` is FY2023, not FY2024 → `FAILED [PERIOD_MISMATCH]`).
+Runs both live cases back-to-back with real `time.perf_counter()` timing, zero hardcoded page numbers, and zero hardcoded operands:
+- **Run A (Complete 6-page filing with Note 7 on Page 6)**: Round 1 hits `[1, 2]` (`GAAP +4.0 pp`) → detects unresolved `Note 7` → Round 2 reads `[6]` → binds 6 cross-page cells (`p2:L03`, `p2:L04`, `p6:L05`) → flips answer to **`-5.0 pp` (`VERIFIED`)**.
+- **Run B (Same filing with Note 7 removed)**: Round 2 searches unread pages, finds no Note 7, refuses to guess → **`PARTIALLY_VERIFIED`** (`INSUFFICIENT_EVIDENCE`).
 
 ![AnchorDoc Demo Preview](assets/demo_preview.gif)
 
@@ -48,22 +50,23 @@ In one run, AnchorDoc locates the income statement on a built-in 3-page filing i
 | Flat Chunk BM25 | `0.3s` · `0` LLM calls | `33.3%` | `32.0%` | `36.6%` (`0.0%` Chart/Fig) |
 | Dense Vector RAG (`BGE-small` ONNX) | `47.6s` (neural embed) | `39.3%` | `48.7%` | Blind to pure-image slides |
 | LLM Tree-Index (PageIndex-style 12p win) | `11.4s` · `19.2` calls · `33k` tok | `35.9%` *(39q subset)* | `43.6%` *(39q subset)* | Requires VLM per page |
-| **⚓ AnchorDoc (`v0.9.2`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
+| **⚓ AnchorDoc (`v0.9.3`)** | **`0.33s` · `0` LLM calls** *(warm `3.9ms`)* | **`85.3%`** *(`96.0%` metrics · `84.7%` auto)* | **`89.3%`** *(`100%` metrics)* | **`68.3%`** *(`54.5%` Chart/Fig)* |
 
-*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Retrieval/adjudication benchmarks reflect frozen milestone runs preserved backward-compatibly in `v0.9.x`, while `v0.9.0–v0.9.2` add and harden zero-API-key independent claim verification; complete ablations and cross-model (`DeepSeek-V4.1-Flash`) tables are in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
+*\*Unified base model (`deepseek-v4-flash`, `temperature=0`, Apache-2.0 `pypdfium2`). Retrieval/adjudication benchmarks reflect frozen milestone runs preserved backward-compatibly in `v0.9.x`, while `v0.9.0–v0.9.3` add zero-API-key claim verification and cross-reference sufficiency detection; complete ablations and cross-model (`DeepSeek-V4.1-Flash`) tables are in [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md).*
 
 ---
 
-## Independent Claim Verification: Verify ANY AI Answer (`v0.9.2`, Zero API Key)
+## Independent Claim Verification: Verify ANY AI Answer (`v0.9.3`, Zero API Key)
 
 Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an external claim (quotes, operands bound to row/period/unit, and symbolic or numeric formula) to AnchorDoc **before signing off**. Every report states explicitly **what was verified** (`checks: {quotes, operands, computation, claim_alignment}` + `verified_scope`) with a 4-state verdict (`VERIFIED` | `PARTIALLY_VERIFIED` | `FAILED` | `UNVERIFIED`):
 
 - **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**: `-12%` vs `12%`, accounting parentheses `$(145)` vs `$145` (even when `+12%` exists elsewhere on the same page)
 - **`PERIOD_MISMATCH` / `CLAIM_PERIOD_MISMATCH`**: catches both cell-level column swaps (`378` is `FY2023` while claiming `FY2024`) and claim-level period swaps (valid `FY2024` operands & math `480`, but claim text mislabels it as `FY2023`)
+- **`CLAIM_METRIC_MISMATCH`**: keeps `computation="verified"` while failing `claim_alignment` when valid `rev - cogs = 480` (Gross Profit) is mislabeled in `claim_text` as another statement row such as `Net Income` (actual `Net Income = 125` on the same page)
 - **`UNIT_SCALE_MISMATCH`**: `in millions` vs `billions` confusion (while passing valid `$1,200M == $1.2B` conversions)
-- **`PP_VS_PCT_CONFUSION`**: margin difference `40.0% - 36.0% = 4.0 pp` mislabeled as `4.0%`
+- **`PP_VS_PCT_CONFUSION`**: AST-aware check distinguishing single relative growth (`(a-b)/b*100` → `%`) from differences of two rates/ratios (`(gp24/rev24*100) - (gp23/rev23*100)` → `pp`)
 - **`FORMULA_OPERAND_UNBOUND`** (anti-laundering): supports symbolic formulas (`rev - cogs`) and rejects **any** unbound variable or numeric literal — including mixed formulas like `rev - 700` where valid `rev=1200, cogs=720` operands were attached
-- **`CLAIM_UNSUPPORTED_BY_EVIDENCE` / `CLAIM_ENTAILMENT_NOT_CHECKED`** (scoped honesty): in quote-only mode, a verbatim quote confirms the quote itself (`quotes=verified`), **never** the whole free-text claim — blocking both irrelevant quotes and same-number metric swaps (e.g. claiming `"FY2024 Gross Margin is 65.0%"` with a `"Debt-to-Asset <= 65.0%"` covenant quote) from receiving `VERIFIED`
+- **`CLAIM_UNSUPPORTED_BY_EVIDENCE` / `CLAIM_ENTAILMENT_NOT_CHECKED`** (scoped honesty): in quote-only mode, a verbatim quote confirms the quote itself (`quotes=verified`), **never** the whole free-text claim — blocking both irrelevant quotes and same-number metric swaps (e.g. `"FY2024 Gross Margin is 65.0%"` + `"Debt-to-Asset <= 65.0%"`) from receiving `VERIFIED`
 
 ### Run the Clean-Clone Synthetic Regression Suite in 1 Second (0 Downloads, 0 API Keys)
 
@@ -71,12 +74,12 @@ Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an ext
 python3 benchmarks/run_adversarial_verify.py
 ```
 
-| Verifier (31 Synthetic Cases: 20 Adversarial Traps + 11 Valid Claims) | Non-Verified Traps (↑) | Verdict Split on Traps | False-Pass (↓) | False-Alarm (↓) | Exact Diagnosis |
+| Verifier (33 Synthetic Cases: 22 Adversarial Traps + 11 Valid Claims) | Non-Verified Traps (↑) | Verdict Split on Traps | False-Pass (↓) | False-Alarm (↓) | Exact Diagnosis |
 |---|---:|---|---:|---:|---:|
-| Naive Alphanumeric Citation & Loose Number Check | `20.0%` (4/20) | `4 FAILED` | `80.0%` (16/20) | `9.1%` (1/11) | — |
-| **⚓ AnchorDoc `v0.9.2` (`verify_claim` / `doc_verify`)** | **`20 / 20`** | **`18 FAILED` + `2 PARTIALLY_VERIFIED`** | **`0 / 20`** | **`0 / 11`** | **`20 / 20`** |
+| Naive Alphanumeric Citation & Loose Number Check | `27.3%` (6/22) | `6 FAILED` | `72.7%` (16/22) | `9.1%` (1/11) | — |
+| **⚓ AnchorDoc `v0.9.3` (`verify_claim` / `doc_verify`)** | **`22 / 22`** | **`20 FAILED` + `2 PARTIALLY_VERIFIED`** | **`0 / 22`** | **`0 / 11`** | **`22 / 22`** |
 
-*\*Note: This 31-case suite is a deterministic synthetic regression benchmark covering specific known failure classes (sign flip, year swap, unit swap, pp-vs-%, formula laundering, metric swap); it verifies those regressions cleanly rather than estimating a statistical false-pass rate on arbitrary unseen filings.*
+*\*Note: This 33-case suite is a deterministic synthetic regression benchmark covering specific known failure classes (sign flip, year swap, unit swap, pp-vs-%, formula laundering, metric swap); it verifies those regressions cleanly rather than estimating a statistical false-pass rate on arbitrary unseen filings.*
 
 ```bash
 # Verify any external AI claim with cell-bound symbolic formula (exit 0 = VERIFIED, exit 2 = FAILED / PARTIAL)
@@ -222,8 +225,8 @@ Beyond zero-index retrieval and deterministic claim verification, AnchorDoc's lo
 
 > *How does a long-document system know when the context it retrieved is truly sufficient to answer — and when it must read one more page before committing?*
 
-- **Current (`v0.9.2`)**: Zero-LLM AnchorMap, continuation-table expansion, conditional gap-followup (`B42`), tri-state visual gate (`stated | derivable | absent`), and cell-bound verification (`VERIFIED | PARTIALLY_VERIFIED | FAILED | UNVERIFIED`).
-- **Next (`v1.0`)**: Closed-loop **sufficiency-driven reading** — when the verifier detects a missing comparative period, undefined adjusted-metric footnote, or unresolved cross-reference, the agent automatically triggers a targeted follow-up page read and revises its answer before emitting a final verdict.
+- **Current (`v0.9.3`)**: Zero-LLM AnchorMap, continuation-table expansion, conditional gap-followup (`B42`), zero-LLM cross-reference gap detection (`detect_unresolved_references`), tri-state visual gate (`stated | derivable | absent`), and cell-bound verification (`VERIFIED | PARTIALLY_VERIFIED | FAILED | UNVERIFIED`).
+- **Next (`v1.0`)**: Closed-loop **sufficiency-driven reading** across arbitrary 100–600 page filings — unifying cross-reference gaps, missing comparative periods, and undefined adjusted-metric footnotes directly inside the core retriever + MCP tool loop.
 
 ---
 
@@ -236,7 +239,7 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost Long-Document Context Engineering with Falsifiable Evidence Chains},
   year    = {2026},
-  version = {0.9.2},
+  version = {0.9.3},
   doi     = {10.5281/zenodo.24453581},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}

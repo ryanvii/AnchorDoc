@@ -215,3 +215,59 @@ def test_v092_redteam_mixed_formula_metric_swap_and_claim_period(tmp_path: Path)
     assert year_swap["checks"]["claim_alignment"] == "failed"
 
 
+def test_v093_claim_metric_mismatch_preserves_verified_computation(tmp_path: Path):
+    """Exact regression test for v0.9.3 metric-name swap:
+    rev - cogs = 480 (Gross Profit) claimed as 'Net Income is 480' (actual Net Income = 125)
+    MUST keep computation='verified' while failing claim_alignment with CLAIM_METRIC_MISMATCH.
+    """
+    pdf = build_sample_filing_pdf(tmp_path / "filing.pdf")
+    doc = PdfDocument.from_pdf(pdf)
+
+    for claim in ("FY2024 Net Income is 480 million.", "FY2024 净利润为 480 百万。"):
+        res = verify_claim(
+            doc,
+            claim_text=claim,
+            operands=[
+                {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+                {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+            ],
+            formula="rev - cogs",
+            claimed_value=480,
+            claimed_unit="million",
+        )
+        assert res["verdict"] == "FAILED"
+        assert res["verified"] is False
+        assert "CLAIM_METRIC_MISMATCH" in res["error_codes"]
+        assert res["checks"]["operands"] == "verified"
+        assert res["checks"]["computation"] == "verified"
+        assert res["checks"]["claim_alignment"] == "failed"
+
+
+def test_v093_evidence_sufficiency_walkthrough_flips_answer_and_abstains_without_note7(tmp_path: Path):
+    """Verify the homepage restructuring-footnote sufficiency demo runs end-to-end with 0 API keys:
+    - With Note 7 on Page 6: Round 1 hits Income Statement (+4.0 pp GAAP), detects missing Note 7,
+      Round 2 locates Page 6, recomputes Adjusted Gross Margin across Page 2 + Page 6 (-5.0 pp) -> VERIFIED.
+    - Without Note 7: Round 2 finds no Note 7 -> refuses to guess -> PARTIALLY_VERIFIED.
+    """
+    from examples.quickstart_verify import build_restructuring_filing_pdf, run_sufficiency_walkthrough
+
+    full_pdf = build_restructuring_filing_pdf(tmp_path / "full.pdf", include_note7=True)
+    res_full = run_sufficiency_walkthrough(full_pdf)
+    assert 2 in res_full["round1_pages"]
+    assert 6 not in res_full["round1_pages"]
+    assert any(r["ref"].lower() == "note 7" for r in res_full["unresolved_refs"])
+    assert 6 in res_full["round2_pages"]
+    assert res_full["sufficient_after_round2"] is True
+    assert res_full["gaap_delta_pp"] == 4.0
+    assert res_full["adj_delta_pp"] == -5.0
+    assert res_full["answer_flipped"] is True
+    assert res_full["final_verdict"] == "VERIFIED"
+
+    no_note7_pdf = build_restructuring_filing_pdf(tmp_path / "no_note7.pdf", include_note7=False)
+    res_partial = run_sufficiency_walkthrough(no_note7_pdf)
+    assert res_partial["gaap_verdict"]["verdict"] == "VERIFIED"
+    assert res_partial["sufficient_after_round2"] is False
+    assert res_partial["final_verdict"] == "PARTIALLY_VERIFIED"
+
+
+

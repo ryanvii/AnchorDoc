@@ -557,7 +557,28 @@ def _detect_pp_vs_pct_confusion(
                     f"Formula {f!r} computes a percentage-point difference, but claim text states `%` instead of `pp`/percentage points."
                 )
 
-    is_rel_change = "/" in f and ("-" in f) and ("100" in f or "100.0" in f)
+    # Use AST root structure to distinguish:
+    # - Difference of two ratios: `(a / b * 100) - (c / d * 100)` -> percentage points (`pp`)!
+    # - Single relative percentage change: `(a - b) / b * 100` -> relative percent (`%`)!
+    is_ratio_diff = False
+    is_rel_change = False
+    try:
+        root = ast.parse(f, mode="eval").body
+        if isinstance(root, ast.BinOp) and isinstance(root.op, ast.Sub):
+            left_has_div = any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for n in ast.walk(root.left))
+            right_has_div = any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for n in ast.walk(root.right))
+            if left_has_div and right_has_div:
+                is_ratio_diff = True
+        if not is_ratio_diff and "/" in f and "-" in f and ("100" in f or "100.0" in f):
+            is_rel_change = True
+    except SyntaxError:
+        is_rel_change = "/" in f and ("-" in f) and ("100" in f or "100.0" in f)
+
+    if is_ratio_diff and cu and cu[0] == "percent":
+        return (
+            f"Formula {f!r} subtracts two percentage ratios, which yields percentage points (pp), "
+            f"not relative percent ({claimed_unit!r})."
+        )
     if is_rel_change and cu and cu[0] == "pp":
         return (
             f"Formula {f!r} computes a relative percentage change (%), not percentage points ({claimed_unit!r})."
@@ -573,6 +594,142 @@ def _extract_non_year_claim_numbers(claim_text: str) -> list[float]:
             continue
         out.append(v)
     return out
+
+
+_CLAIM_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "net income": ("净利润", "净收益"),
+    "gross profit": ("毛利", "毛利润"),
+    "gross margin": ("毛利率",),
+    "operating income": ("营业利润",),
+    "operating margin": ("营业利润率",),
+    "total revenue": ("营业总收入", "总营收", "总收入"),
+    "cost of goods sold": ("营业成本", "销售成本"),
+    "restructuring expense": ("重组费用",),
+    "total assets": ("总资产", "资产总计"),
+    "total liabilities": ("总负债", "负债总计"),
+    "long-term debt": ("长期债务", "长期借款"),
+    "debt-to-asset ratio": ("资产负债率",),
+}
+
+_ADJUSTED_PREFIX_RE = re.compile(
+    r"(?:adjusted|non[-\s]?gaap|pro\s+forma|ex[-\s]?[a-z]+|excluding|normalized|core|underlying|调整后|扣非|剔除)\s*$",
+    re.IGNORECASE,
+)
+_CHANGE_SUFFIX_RE = re.compile(
+    r"^\s*(?:growth|grew|change|changed|expansion|expanded|contraction|contracted|decline|declined|"
+    r"increase|increased|decrease|decreased|yoy|qoq|delta|diff|difference|spread|vs\.?|versus|"
+    r"增长|增速|变动|扩张|收缩|下降|同比|环比|差值)",
+    re.IGNORECASE,
+)
+_RATE_SUFFIX_RE = re.compile(r"^\s*(?:margin|ratio|rate|%|率)", re.IGNORECASE)
+
+
+def _clean_row_label_for_metric(raw_label: str) -> str:
+    """Strip trailing numeric columns and parenthetical note pointers from a parsed table row label."""
+    s = re.split(r"\s+(?:[$¥€£(+-]?\d)", raw_label or "", maxsplit=1)[0]
+    s = re.sub(r"\s*\((?:see\s+)?note\s+\d+[^)]*\)", "", s, flags=re.IGNORECASE)
+    return s.strip(" :：|\t-")
+
+
+def _check_claim_metric_conflict(
+    doc: PdfDocument,
+    claim_text: str,
+    *,
+    target_val: float | None,
+    target_unit: str,
+    target_periods: Sequence[str],
+    evidence_pages: Sequence[int],
+) -> str | None:
+    """Detect when claim_text labels a computed value with a DIFFERENT table row metric whose
+    actual value on the evidence statement contradicts the claimed value (e.g. computing
+    rev - cogs = 480 [Gross Profit] but claiming 'FY2024 Net Income is 480 million' when
+    Net Income on the same statement is 125).
+    """
+    if target_val is None or not claim_text.strip() or not evidence_pages:
+        return None
+
+    cu = normalize_unit(target_unit)
+    is_claim_pct = bool(cu and cu[0] in ("percent", "pp"))
+
+    for p in evidence_pages:
+        if p < 1 or p > doc.num_pages:
+            continue
+        rows = parse_page_rows(p, doc.page_text(p))
+        for row in rows:
+            clean_lbl = _clean_row_label_for_metric(row.label)
+            if len(clean_lbl) < 4 or len(clean_lbl.split()) > 6 or clean_lbl.endswith("."):
+                continue
+            low_lbl = clean_lbl.lower()
+            candidates: list[tuple[str, bool]] = [(clean_lbl, False)]
+            for alias in _CLAIM_METRIC_ALIASES.get(low_lbl, ()):
+                candidates.append((alias, True))
+
+            match_span: tuple[int, int] | None = None
+            for cand, is_cjk in candidates:
+                if is_cjk:
+                    idx = claim_text.find(cand)
+                    if idx >= 0:
+                        match_span = (idx, idx + len(cand))
+                        break
+                else:
+                    m = re.search(rf"(?<![A-Za-z0-9]){re.escape(cand)}(?![A-Za-z0-9])", claim_text, re.IGNORECASE)
+                    if m:
+                        match_span = (m.start(), m.end())
+                        break
+            if not match_span:
+                continue
+
+            start, end = match_span
+            left_ctx = claim_text[max(0, start - 28) : start]
+            right_ctx = claim_text[end : min(len(claim_text), end + 28)]
+            if _ADJUSTED_PREFIX_RE.search(left_ctx):
+                continue
+            if _CHANGE_SUFFIX_RE.search(right_ctx):
+                continue
+            if not re.search(r"(?:margin|ratio|rate|率)$", low_lbl) and _RATE_SUFFIX_RE.search(right_ctx):
+                continue
+
+            # Extract row's actual values for target_periods (if period columns align)
+            actual_entries: list[tuple[float, bool, str]] = []
+            matched_period_label = ""
+            if target_periods and row.periods and len(row.values) >= len(row.periods):
+                for tp in target_periods:
+                    for idx_p, rp in enumerate(row.periods):
+                        if rp == tp and idx_p < len(row.values):
+                            actual_entries.append((row.values[idx_p][0], row.values[idx_p][1], rp))
+                            matched_period_label = rp
+            if not actual_entries:
+                actual_entries = [(v, pct, "") for v, pct, _ in row.values]
+            if not actual_entries:
+                continue
+
+            row_is_pct = all(pct for _, pct, _ in actual_entries)
+            if is_claim_pct != row_is_pct:
+                # Percent claim vs non-percent row (or vice versa): skip unless unit is omitted on a pct row
+                if target_unit.strip() or not row_is_pct:
+                    continue
+
+            # Compare target_val (scaled to row's table unit when both are currency scales)
+            cmp_val = target_val
+            if (
+                not row_is_pct
+                and cu
+                and cu[0] in ("thousand", "ten_thousand", "million", "billion")
+                and row.table_unit
+                and row.table_unit[0] in ("thousand", "ten_thousand", "million", "billion")
+            ):
+                cmp_val = target_val * (cu[1] / row.table_unit[1])
+
+            if any(_nums_close(cmp_val, av) for av, _, _ in actual_entries):
+                return None  # Explicitly corroborated by the named table row!
+
+            actual_val = actual_entries[0][0]
+            period_desc = f" for {matched_period_label}" if matched_period_label else ""
+            return (
+                f"Claim labels result {target_val} as {clean_lbl!r}, but {clean_lbl!r} on "
+                f"p{row.page}:L{row.line_no:02d} ({row.raw_line}) is {actual_val}{period_desc}."
+            )
+    return None
 
 
 def verify_claim(
@@ -793,7 +950,9 @@ def verify_claim(
         _add_err("PP_VS_PCT_CONFUSION", pp_err)
 
     # 5. Claim-to-Evidence Alignment Check (Scoped Honesty Contract):
-    # - Check fiscal period consistency between claim_text and bound operands (catches FY2023 claim on FY2024 math!).
+    # - 5a: Fiscal period consistency between claim_text and bound operands (catches FY2023 claim on FY2024 math!).
+    # - 5b: Metric-name consistency against actual table rows on evidence pages (catches "Net Income is 480" when
+    #       rev - cogs = 480 is Gross Profit and Net Income on the same statement is actually 125!).
     # - In quote-only mode (no bound operands / formula), NEVER grant VERIFIED to a free-text claim
     #   merely because a number like `65%` appears in both sentences (prevents metric/meaning confusion
     #   such as "Gross Margin is 65%" verified by "Debt-to-Asset Ratio <= 65%").
@@ -817,7 +976,43 @@ def verify_claim(
                     f"Claim references period(s) {missing_periods}, but verified bound operands only cover {sorted(set(bound_periods))}.",
                 )
 
-        if not period_conflict:
+        # 5b. Metric-name conflict check against table rows on evidence pages
+        metric_conflict = False
+        if not period_conflict and (operand_results or formula):
+            evidence_pages = sorted(
+                {
+                    int(op["page"])
+                    for op in operand_results
+                    if op.get("verified") and op.get("page")
+                }
+            ) or list(scope_pages or [])
+            target_val: float | None = None
+            if claimed_value is not None:
+                try:
+                    target_val = float(str(claimed_value).replace(",", "").replace("%", "").strip())
+                except (TypeError, ValueError):
+                    target_val = None
+            if target_val is None and calc_val is not None:
+                target_val = calc_val
+            if target_val is None:
+                cnums = _extract_non_year_claim_numbers(claim_text)
+                if cnums:
+                    target_val = cnums[0]
+            target_periods = claim_periods or sorted(set(bound_periods))
+            metric_err = _check_claim_metric_conflict(
+                doc,
+                claim_text,
+                target_val=target_val,
+                target_unit=claimed_unit,
+                target_periods=target_periods,
+                evidence_pages=evidence_pages,
+            )
+            if metric_err:
+                metric_conflict = True
+                claim_alignment_status = "failed"
+                _add_err("CLAIM_METRIC_MISMATCH", metric_err)
+
+        if not period_conflict and not metric_conflict:
             claim_nums = _extract_non_year_claim_numbers(claim_text)
             if not operand_results and not formula:
                 # Quote-only mode: quote existence proves the quote is verbatim, NOT that the
@@ -950,3 +1145,101 @@ def verify_claim(
         "grounding_pages": scope_pages,
         "citations": [f"p.{p}" for p in scope_pages],
     }
+
+
+# ---------------------------------------------------------------------------
+# Cross-Reference & Evidence Sufficiency Gap Detector (Zero-LLM)
+# ---------------------------------------------------------------------------
+
+_XREF_CITE_RE = re.compile(
+    r"(?:(?:see|disclosed\s+in|refer\s+to|described\s+in|per|detailed\s+in)\s+)?"
+    r"\b((?:Note|Appendix|Schedule|Exhibit)\s+(?:\d+[A-Za-z]?|[A-Z](?=\b|\s|\.|,)))\b",
+    re.IGNORECASE,
+)
+_XREF_CITE_ZH_RE = re.compile(r"(?:见|详见|参见|披露于)\s*(附注\s*[一二三四五六七八九十\d]+|附件\s*[A-Z0-9一二三四五六七八九十]+)")
+
+
+def detect_unresolved_references(
+    pages_text: dict[int, str],
+    query: str = "",
+) -> list[dict[str, Any]]:
+    """Detect explicit document cross-references (e.g. ``Note 7``, ``Appendix A``) cited inside
+    already-read pages whose defining section header has NOT been read yet.
+
+    This powers sufficiency-driven follow-up reads: when Round-1 pages mention ``See Note 7``
+    next to a query-relevant line item, the agent knows its evidence is incomplete and can
+    issue a targeted Round-2 ``doc_locate`` / ``doc_read`` before committing to an answer.
+    """
+    if not pages_text:
+        return []
+
+    # 1. Collect section headings ALREADY present in the read pages (e.g. "NOTE 7. RESTRUCTURING...")
+    defined_refs: set[str] = set()
+    for text in pages_text.values():
+        for raw_line in (text or "").splitlines():
+            s = raw_line.strip()
+            if not s:
+                continue
+            m_en = re.match(
+                r"^((?:Note|Appendix|Schedule|Exhibit)\s+(?:\d+[A-Za-z]?|[A-Z]))(?:\s*[:.\-—]|$)",
+                s,
+                re.IGNORECASE,
+            )
+            if m_en:
+                defined_refs.add(re.sub(r"\s+", " ", m_en.group(1)).lower())
+            m_zh = re.match(r"^(附注\s*[一二三四五六七八九十\d]+|附件\s*[A-Z0-9一二三四五六七八九十]+)(?:\s*[:：.、\-—]|$)", s)
+            if m_zh:
+                defined_refs.add(re.sub(r"\s+", "", m_zh.group(1)))
+
+    query_toks = {t.lower() for t in re.findall(r"[A-Za-z]{3,}|[\u4e00-\u9fff]{2,}", query or "")}
+    seen_refs: dict[str, dict[str, Any]] = {}
+
+    # 2. Scan read pages for cross-references not yet defined in defined_refs
+    for p, text in sorted(pages_text.items()):
+        for line_no, raw_line in enumerate((text or "").splitlines(), start=1):
+            s = raw_line.strip()
+            if not s:
+                continue
+            # Ignore lines that themselves start with the heading
+            if re.match(r"^(?:Note|Appendix|Schedule|Exhibit)\s+(?:\d+[A-Za-z]?|[A-Z])\s*[:.\-—]", s, re.IGNORECASE):
+                continue
+
+            found_refs: list[tuple[str, str]] = []
+            # Require either explicit pointer verb ("see Note 7", "in Note 7") or parenthetical "(Note 7)"
+            for m in _XREF_CITE_RE.finditer(s):
+                full = m.group(0).lower()
+                ref_raw = re.sub(r"\s+", " ", m.group(1)).strip()
+                ref_key = ref_raw.lower()
+                before = s[max(0, m.start() - 12) : m.start()].lower()
+                has_cue = (
+                    any(k in full for k in ("see ", "disclosed in ", "refer to ", "described in ", "per ", "detailed in "))
+                    or before.rstrip().endswith(("(", "in", "see", "per"))
+                )
+                if has_cue:
+                    found_refs.append((ref_key, ref_raw))
+            for m in _XREF_CITE_ZH_RE.finditer(s):
+                ref_raw = m.group(1).strip()
+                found_refs.append((re.sub(r"\s+", "", ref_raw), ref_raw))
+
+            line_toks = {t.lower() for t in re.findall(r"[A-Za-z]{3,}|[\u4e00-\u9fff]{2,}", s)}
+            overlap = sorted(query_toks & line_toks) if query_toks else []
+
+            for ref_key, ref_raw in found_refs:
+                if ref_key in defined_refs:
+                    continue
+                cand = {
+                    "ref": ref_raw,
+                    "cited_on_page": p,
+                    "line_anchor": f"p{p}:L{line_no:02d}",
+                    "context_line": s,
+                    "query_relevant": bool(overlap) or not query_toks,
+                    "matched_terms": overlap,
+                    "followup_query": f"{ref_raw} {' '.join(overlap)}".strip(),
+                }
+                prev = seen_refs.get(ref_key)
+                if prev is None or (cand["query_relevant"] and not prev["query_relevant"]) or len(cand["matched_terms"]) > len(prev["matched_terms"]):
+                    seen_refs[ref_key] = cand
+
+    results = list(seen_refs.values())
+    results.sort(key=lambda r: (not r["query_relevant"], -len(r["matched_terms"]), r["cited_on_page"]))
+    return results

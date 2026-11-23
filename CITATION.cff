@@ -9,7 +9,7 @@ authors:
 repository-code: "https://github.com/ryanvii/AnchorDoc"
 url: "https://github.com/ryanvii/AnchorDoc"
 license: Apache-2.0
-version: "0.9.2"
+version: "0.9.3"
 doi: "10.5281/zenodo.24453581"
 date-released: "2026-11-23"
 keywords:

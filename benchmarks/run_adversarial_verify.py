@@ -391,6 +391,36 @@ CASES: list[dict[str, Any]] = [
         "claimed_value": 480,
         "claimed_unit": "million",
     },
+    {
+        "id": "ADV-21",
+        "category": "claim_metric_mismatch",
+        "description": "Metric-name swap: FY2024 rev - cogs = 480 is Gross Profit, but claim labels it `Net Income` (actual Net Income = 125)!",
+        "expected_verified": False,
+        "expected_error": "CLAIM_METRIC_MISMATCH",
+        "claim_text": "FY2024 Net Income is 480 million.",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - cogs",
+        "claimed_value": 480,
+        "claimed_unit": "million",
+    },
+    {
+        "id": "ADV-22",
+        "category": "claim_metric_mismatch",
+        "description": "Chinese metric-name swap: FY2024 rev - cogs = 480 claimed as `净利润` (actual Net Income = 125)!",
+        "expected_verified": False,
+        "expected_error": "CLAIM_METRIC_MISMATCH",
+        "claim_text": "FY2024 净利润为 480 million。",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - cogs",
+        "claimed_value": 480,
+        "claimed_unit": "million",
+    },
     # --- 11 VALID GROUND-TRUTH CLAIMS (expected_verified = True; measures False-Alarm Rate) ---
     {
         "id": "VAL-01",
@@ -570,7 +600,7 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
             })
 
     summary = {
-        "benchmark": "AnchorDoc v0.9.2 Synthetic Adversarial Verification Regression (31 cases, 0 API keys)",
+        "benchmark": "AnchorDoc v0.9.3 Synthetic Adversarial Verification Regression (33 cases, 0 API keys)",
         "total_cases": len(CASES),
         "adversarial_traps": len(traps),
         "valid_claims": len(valids),
@@ -601,7 +631,7 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run AnchorDoc v0.9.2 Adversarial Verification Regression Suite (0 API keys).")
+    ap = argparse.ArgumentParser(description="Run AnchorDoc v0.9.3 Adversarial Verification Regression Suite (0 API keys).")
     ap.add_argument("--out", default="", help="Optional path to save JSON results.")
     args = ap.parse_args()
     res = run_benchmark(Path(args.out) if args.out else None)
@@ -611,7 +641,7 @@ def main() -> int:
     print(f"Cases: {res['total_cases']} ({res['adversarial_traps']} adversarial traps + {res['valid_claims']} valid claims)")
     print(f"Naive Citation/Number Check -> Non-Verified: {nv['trap_catch_rate_%']:5.1f}% | False-Pass: {nv['false_pass_rate_%']:5.1f}% ({nv['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {nv['false_alarm_rate_%']:5.1f}%")
     print(
-        f"AnchorDoc v0.9.2 Verifier   -> Blocked: {ad['non_verified_count']}/{res['adversarial_traps']} "
+        f"AnchorDoc v0.9.3 Verifier   -> Blocked: {ad['non_verified_count']}/{res['adversarial_traps']} "
         f"({ad['hard_failed_count']} FAILED + {ad['partially_verified_count']} PARTIALLY_VERIFIED) | "
         f"False-Pass: {ad['false_pass_count']}/{res['adversarial_traps']} | "
         f"False-Alarm: {ad['false_alarm_count']}/{res['valid_claims']} | Exact Diag: {ad['exact_error_code_match']}"

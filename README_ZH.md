@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
-[![合成回归](https://img.shields.io/badge/合成回归%2031题-20%2F20%20拦截%20%7C%200%2F11%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v092零-api-key)
+[![合成回归](https://img.shields.io/badge/合成回归%2033题-22%2F22%20拦截%20%7C%200%2F11%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v093零-api-key)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -21,9 +21,9 @@
 
 **AnchorDoc** 让 AI Agent 按问题读长文档，找到回答所需的证据。它利用目录、页码和表格定位相关内容，在证据不足时继续查找，并让答案里的引文和计算可以回到原文核对。
 
-> **为什么真实 100–600 页长 PDF 上传统切块 RAG 经常失真？** 比如你问 Agent：*“剔除一次性重组费用后，FY2024 毛利率是否同比扩张？”* 经营综述在第 1 页，含 FY2024/FY2023/FY2022 多期对照的利润表在第 2 页，重组费用明细与口径附注在第 3 页。固定切块会切碎表头并漏掉续表/附注；整本硬塞进上下文又会引发注意力衰减与静默串列。AnchorDoc 用 **0.3s 零 LLM 全文结构锚点图（AnchorMap）** 按需跨页定位正文、表格与附注，对扫描页/图表做选择性 2×2 视觉放大，并把每条引文、表格单元格与 Python AST 验算锚定回原页。
+> **AnchorDoc 最核心的一幕：** 假设你问 *“剔除一次性重组费用后，FY2024 毛利率相对 FY2023 是否扩张？”* 第一轮读完综述（第 1 页）和利润表（第 2 页），报表毛利率从 `36.0%` 升至 `40.0%`（**`+4.0 pp`，表面看是“扩张”**）。但 AnchorDoc 的证据充分性检查发现：利润表与正文指向未读附注 **`See Note 7`**，还缺“多少重组费用计入了营业成本（COGS）”的归属口径，于是自动发起第二轮补查命中 **第 6 页（`Note 7`）**，跨第 2 页与第 6 页单元格重算调整后毛利率（`46.0% → 41.0%`），**多读一页直接把答案反转成“否（收缩 `-5.0 pp`）”**；如果把 `Note 7` 从 PDF 里抽掉，系统则诚实输出 `PARTIALLY_VERIFIED`（确认报表毛利率上升 `+4.0 pp`，调整后口径因缺附注 `INSUFFICIENT_EVIDENCE`，绝不编造）。
 
-### 10 秒零门槛体验（干净克隆 · 0 外网下载 · 0 API Key）
+### 10 秒亲手跑通这一幕（干净克隆 · 0 外网下载 · 0 API Key）
 
 ```bash
 git clone https://github.com/ryanvii/AnchorDoc.git && cd AnchorDoc
@@ -31,7 +31,9 @@ pip install -e .
 python3 examples/quickstart_verify.py
 ```
 
-一次运行即可看到全链路：`<5ms` 零 LLM 定位样例财报利润表 → 单元格绑定复算 FY2024 毛利（`rev - cogs = 480` → `VERIFIED`）→ 紧接着把同页一个数换成去年的 `378`，当场抓出 **`FAILED [PERIOD_MISMATCH]`** 并精确报出 `378` 实际来自 `FY2023`。
+一次命令背靠背运行两组真实计时（`time.perf_counter()`）、零硬编码页码、零硬编码操作数的完整闭环：
+- **Run A（完整 6 页财报，含第 6 页 Note 7）**：第一轮命中 `[1, 2]`（核验报表 `+4.0 pp`）→ 识别缺失 `Note 7` → 第二轮补读 `[6]` → 跨页绑定 6 个原表单元格（`p2:L03`, `p2:L04`, `p6:L05`）→ 结论反转为 **`-5.0 pp`（`VERIFIED`）**；
+- **Run B（抽掉 Note 7 的 5 页财报）**：第二轮全书补查未见 Note 7 → 拒绝硬猜 → 返回 **`PARTIALLY_VERIFIED`（`INSUFFICIENT_EVIDENCE`）**。
 
 ![AnchorDoc 演示预览](assets/demo_preview.gif)
 
@@ -48,20 +50,21 @@ python3 examples/quickstart_verify.py
 | 传统平铺切块 BM25 | `0.3s` · `0` 次 LLM | `33.3%` | `32.0%` | `36.6%`（图表 `0.0%`） |
 | Dense 向量 RAG（`BGE-small` ONNX） | `47.6s`（向量推理） | `39.3%` | `48.7%` | 纯图 PPT 不可读 |
 | LLM 预建树（PageIndex 风格 12 页窗口） | `11.4s` · `19.2` 次 · `33k` tok | `35.9%` *（39 题子集）* | `43.6%` *（39 题子集）* | 需逐页调 VLM |
-| **⚓ AnchorDoc（`v0.9.2`）** | **`0.33s` · `0` 次 LLM** *（热重载 `3.9ms`）* | **`85.3%`** *（数值表 `96.0%` · `auto` 路由 `84.7%`）* | **`89.3%`** *（数值表 `100%`）* | **`68.3%`** *（图表 `54.5%`）* |
+| **⚓ AnchorDoc（`v0.9.3`）** | **`0.33s` · `0` 次 LLM** *（热重载 `3.9ms`）* | **`85.3%`** *（数值表 `96.0%` · `auto` 路由 `84.7%`）* | **`89.3%`** *（数值表 `100%`）* | **`68.3%`** *（图表 `54.5%`）* |
 
-*注：上表统一使用同底座模型（`deepseek-v4-flash`, `temperature=0`）。`v0.9.x` 完整保留核心检索与裁决引擎向后兼容，并在 `v0.9.0–v0.9.2` 中持续加固零 API Key 独立答案复算核验层；完整消融与跨模型（官方 `DeepSeek-V4.1-Flash`）明细见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。*
+*注：上表统一使用同底座模型（`deepseek-v4-flash`, `temperature=0`）。`v0.9.x` 完整保留核心检索与裁决引擎向后兼容，并在 `v0.9.0–v0.9.3` 中新增独立答案复算核验层与跨页引用充分性检测；完整消融与跨模型（官方 `DeepSeek-V4.1-Flash`）明细见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。*
 
 ---
 
-## 独立复算与对抗核验：拿任意外部 AI 结论来验（`v0.9.2`，零 API Key）
+## 独立复算与对抗核验：拿任意外部 AI 结论来验（`v0.9.3`，零 API Key）
 
 无论你的团队用 **传统 RAG、PageIndex 还是超长上下文大模型** 生成了财报或合同结论，交付签字前都可以直接把「PDF + 外部结论」丢给 AnchorDoc 做确定性把关。每份报告均分域汇报已证实范围（`checks: {quotes, operands, computation, claim_alignment}` + `verified_scope`），并给出四态诚实判定（`VERIFIED` | `PARTIALLY_VERIFIED` | `FAILED` | `UNVERIFIED`）：
 
 - **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**：正负号翻转（`-12%` 冒充 `12%`，哪怕同页别处正好有 `+12%` 也拦截）、会计括号负数 `$(145)` / `(8.4%)` 误读为正；
 - **`PERIOD_MISMATCH` / `CLAIM_PERIOD_MISMATCH`**：同时拦截单元格取数串年（拿 FY2023 的 `378` 冒充 FY2024）以及结论文字串年（算式与操作数均为 `FY2024` 且算出 `480`，但结论句写成 `FY2023`）；
+- **`CLAIM_METRIC_MISMATCH`**：保留 `computation="verified"`（计算已核验），同时拦截指标偷换——例如用 `rev - cogs = 480`（毛利）冒充同表中的 `Net Income / 净利润`（同页实际净利润为 `125`）；
 - **`UNIT_SCALE_MISMATCH`**：百万（`in millions`）与十亿（`billions`）偷换（同时放行合法换算如 `$1,200M == $1.2B`）；
-- **`PP_VS_PCT_CONFUSION`**：把毛利率差值 `40.0% - 36.0% = 4.0 pp` 错写成 `4.0%`；
+- **`PP_VS_PCT_CONFUSION`**：基于 AST 根结构精确区分单比率增速（`(a-b)/b*100` → `%`）与双比率差值（`(gp24/rev24*100) - (gp23/rev23*100)` → `pp`）；
 - **`FORMULA_OPERAND_UNBOUND`（防证据洗白）**：支持公式直接引用已绑定单元格操作数名（如 `rev - cogs`），任何公式里未绑定到已核验操作数的变量或数值字面量一律拦截（包括混合公式 `rev - 700`，即使同时提交了合法的 `rev=1200, cogs=720`）；
 - **`CLAIM_UNSUPPORTED_BY_EVIDENCE` / `CLAIM_ENTAILMENT_NOT_CHECKED`（分域诚实）**：纯引文模式下，引文存在仅证实“引文已找到”（`quotes=verified`），**绝不**把整条自由文本结论判为 `VERIFIED` —— 彻底封堵无关引文与“同数字跨指标偷换”（例如拿“资产负债率不得超过 65.0%”的引文冒充“FY2024 毛利率为 65.0%”）。
 
@@ -71,12 +74,12 @@ python3 examples/quickstart_verify.py
 python3 benchmarks/run_adversarial_verify.py
 ```
 
-| 核验器（31 题合成回归集：20 个对抗陷阱 + 11 条合法正确答案） | 错答案非绿勾率 (↑) | 陷阱判定拆分 | 错答案漏放 (↓) | 正确答案误拦 (↓) | 精确错因归类 |
+| 核验器（33 题合成回归集：22 个对抗陷阱 + 11 条合法正确答案） | 错答案非绿勾率 (↑) | 陷阱判定拆分 | 错答案漏放 (↓) | 正确答案误拦 (↓) | 精确错因归类 |
 |---|---:|---|---:|---:|---:|
-| 朴素字母数字引文与宽松数值检查 | `20.0%` (4/20) | `4 FAILED` | `80.0%` (16/20) | `9.1%` (1/11) | — |
-| **⚓ AnchorDoc `v0.9.2`（`verify_claim` / `doc_verify`）** | **`20 / 20`** | **`18 FAILED` + `2 PARTIALLY_VERIFIED`** | **`0 / 20`** | **`0 / 11`** | **`20 / 20`** |
+| 朴素字母数字引文与宽松数值检查 | `27.3%` (6/22) | `6 FAILED` | `72.7%` (16/22) | `9.1%` (1/11) | — |
+| **⚓ AnchorDoc `v0.9.3`（`verify_claim` / `doc_verify`）** | **`22 / 22`** | **`20 FAILED` + `2 PARTIALLY_VERIFIED`** | **`0 / 22`** | **`0 / 11`** | **`22 / 22`** |
 
-*注：本 31 题为干净环境可 1 秒运行的确定性合成回归集，用于持续验证已知高危漏洞类（符号、年份、量纲、百分点、公式洗白、指标偷换）的防回退，不代表任意真实未见财报上的统计漏放率估计。*
+*注：本 33 题为干净环境可 1 秒运行的确定性合成回归集，用于持续验证已知高危漏洞类（符号、年份、量纲、百分点、公式洗白、指标偷换）的防回退，不代表任意真实未见财报上的统计漏放率估计。*
 
 ![AnchorDoc 公开基准对比](assets/benchmark_comparison.svg)
 
@@ -179,8 +182,8 @@ anchordoc audit submission.pdf --checklist examples/sample_checklist.json --html
 
 > *系统如何知道自己当前拿到的上下文已经足够回答问题？又在什么时候必须多读一页（例如去年的对照表、定义调整口径的附注、或未展开的扫描附件），从而修正最初看似合理的草稿答案？*
 
-- **当前版本（`v0.9.2`）**：已完成零 LLM 结构锚点图、续表自动扩展、条件缺口追问（`B42`）、三值视觉门禁（`stated | derivable | absent`）以及单元格级确定性核验（`VERIFIED | PARTIALLY_VERIFIED | FAILED | UNVERIFIED`）。
-- **下一阶段（`v1.0`）**：把核验器与阅读器打通成**充分性驱动的闭环阅读**——当核验层发现缺少对比期列、附注口径未补齐或交叉引用未落地时，自动触发定向补页阅读并重算答案，真正做到“拿不全就继续找，找全了再给可核对的结论”。
+- **当前版本（`v0.9.3`）**：已完成零 LLM 结构锚点图、续表自动扩展、条件缺口追问（`B42`）、零 LLM 跨页附注引用缺口检测（`detect_unresolved_references`）、三值视觉门禁（`stated | derivable | absent`）以及单元格级确定性核验（`VERIFIED | PARTIALLY_VERIFIED | FAILED | UNVERIFIED`）。
+- **下一阶段（`v1.0`）**：把跨页附注引用、缺对比期与口径缺口检测全面接入通用检索主循环与 MCP 工具链，在任意 100–600 页真实长文档上实现端到端“拿不全就继续找，找全了再给可核对结论”的闭环阅读。
 
 ---
 
@@ -193,7 +196,7 @@ anchordoc audit submission.pdf --checklist examples/sample_checklist.json --html
   author  = {Wu, HuiYang},
   title   = {AnchorDoc: Zero-Index-Cost Long-Document Context Engineering with Falsifiable Evidence Chains},
   year    = {2026},
-  version = {0.9.2},
+  version = {0.9.3},
   doi     = {10.5281/zenodo.24453581},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
