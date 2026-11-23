@@ -289,7 +289,28 @@ def run_sufficiency_walkthrough(pdf_path: Path, query: str = QUESTION) -> dict[s
             "answer_flipped": (gaap_delta_pp > 0) != (adj_delta_pp > 0),
         }
 
-    # Note 7 missing -> refuse to guess! Report scoped honesty clearly.
+    # Distinguish two failure modes honestly:
+    # 1) Reference itself was NOT found anywhere in the PDF (`REF_NOT_FOUND`).
+    # 2) Reference section WAS found on Round-2 page(s), but the required COGS allocation row
+    #    could not be parsed (`ALLOCATION_ROW_NOT_PARSED`) — tell the user exactly which page to review!
+    still_unresolved = [r["ref"] for r in detect_unresolved_references(read_texts, query=query) if r["query_relevant"]]
+    resolved_refs = [r["ref"] for r in unresolved if r["ref"] not in still_unresolved]
+
+    if resolved_refs and r2_pages:
+        failure_stage = "ALLOCATION_ROW_NOT_PARSED"
+        missing_reason = (
+            f"Reported GAAP Gross Margin ({gaap_delta_pp:+.1f} pp) is VERIFIED on Page {rev24['page']}, "
+            f"and {resolved_refs} was found on page(s) {r2_pages}, but the required COGS restructuring "
+            f"allocation row could not be parsed for FY2024/FY2023 — please review page(s) {r2_pages} manually."
+        )
+    else:
+        failure_stage = "REF_NOT_FOUND"
+        missing_reason = (
+            f"Reported GAAP Gross Margin ({gaap_delta_pp:+.1f} pp) is VERIFIED on Page {rev24['page']}, "
+            f"but Adjusted Gross Margin (ex-restructuring) has INSUFFICIENT_EVIDENCE: "
+            f"unresolved cross-reference {still_unresolved or [r['ref'] for r in unresolved]} was not found in the PDF."
+        )
+
     return {
         "n_pages": doc.num_pages,
         "open_ms": t_open_ms,
@@ -304,25 +325,24 @@ def run_sufficiency_walkthrough(pdf_path: Path, query: str = QUESTION) -> dict[s
         "round2_ms": t_r2_ms,
         "sufficient_after_round2": False,
         "final_verdict": "PARTIALLY_VERIFIED",
-        "missing_reason": (
-            f"Reported GAAP Gross Margin (+{gaap_delta_pp:.1f} pp) is VERIFIED on Page {rev24['page']}, "
-            f"but Adjusted Gross Margin (ex-restructuring) has INSUFFICIENT_EVIDENCE: "
-            f"unresolved cross-reference {[r['ref'] for r in unresolved]} was not found in the PDF."
-        ),
+        "failure_stage": failure_stage,
+        "missing_reason": missing_reason,
         "answer_flipped": False,
     }
 
 
 def _print_run(title: str, res: dict[str, Any]) -> None:
+    gaap_d = res["gaap_delta_pp"]
+    gaap_stance = f"YES (expanded {gaap_d:+.1f} pp)" if gaap_d > 0 else (f"NO (contracted {gaap_d:+.1f} pp)" if gaap_d < 0 else "NO (flat 0.0 pp)")
     print(f"\n{'=' * 78}")
     print(f"  {title} ({res['n_pages']}-page PDF | open+index {res['open_ms']:.1f}ms)")
     print(f"{'=' * 78}")
     print(f"  [Round 1] Zero-LLM locate+read hit pages {res['round1_pages']} in {res['round1_ms']:.1f}ms")
     print(
         f"            Reported GAAP Gross Margin: FY2023={res['gaap_gm23']:.1f}% -> FY2024={res['gaap_gm24']:.1f}% "
-        f"({res['gaap_delta_pp']:+.1f} pp) [{res['gaap_verdict']['verdict']}]"
+        f"({gaap_d:+.1f} pp) [{res['gaap_verdict']['verdict']}]"
     )
-    print("            Naive single-pass headline answer would say: YES (expanded +4.0 pp)")
+    print(f"            Naive single-pass headline answer would say: {gaap_stance}")
     refs = res["unresolved_refs"]
     if refs:
         r0 = refs[0]
@@ -336,17 +356,23 @@ def _print_run(title: str, res: dict[str, Any]) -> None:
         )
     if res["sufficient_after_round2"]:
         av = res["adj_verdict"]
+        adj_d = res["adj_delta_pp"]
+        adj_dir = "YES — Adjusted Gross Margin EXPANDED" if adj_d > 0 else ("NO — Adjusted Gross Margin CONTRACTED" if adj_d < 0 else "NO — Adjusted Gross Margin FLAT")
+        n_extra = len(res["round2_pages"])
         print(
             f"            Adjusted Gross Margin (ex-COGS restructuring): "
-            f"FY2023={res['adj_gm23']:.1f}% -> FY2024={res['adj_gm24']:.1f}% ({res['adj_delta_pp']:+.1f} pp)"
+            f"FY2023={res['adj_gm23']:.1f}% -> FY2024={res['adj_gm24']:.1f}% ({adj_d:+.1f} pp)"
         )
         print(f"  [Final]   Verdict: {av['verdict']} | verified_scope={av['verified_scope']}")
         print("            Bound cross-page cells:")
         for op in av["operands"]:
             print(f"              - {op['name']:6s} = {op['value']:6.1f} {op['unit']:7s} @ {op['line_anchor']} | {op['source_line']}")
-        print("  [Result]  ANSWER FLIPPED after reading 1 more page: NO — Adjusted Gross Margin CONTRACTED (-5.0 pp)!")
+        if res["answer_flipped"]:
+            print(f"  [Result]  ANSWER FLIPPED after reading {n_extra} more page(s): {adj_dir} ({adj_d:+.1f} pp)!")
+        else:
+            print(f"  [Result]  ANSWER CONFIRMED after reading {n_extra} more page(s): {adj_dir} ({adj_d:+.1f} pp).")
     else:
-        print(f"  [Final]   Verdict: {res['final_verdict']} (refused to guess!)")
+        print(f"  [Final]   Verdict: {res['final_verdict']} [{res.get('failure_stage', 'INSUFFICIENT_EVIDENCE')}] (refused to guess!)")
         print(f"            {res['missing_reason']}")
 
 

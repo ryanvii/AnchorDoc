@@ -268,6 +268,40 @@ def test_v093_evidence_sufficiency_walkthrough_flips_answer_and_abstains_without
     assert res_partial["gaap_verdict"]["verdict"] == "VERIFIED"
     assert res_partial["sufficient_after_round2"] is False
     assert res_partial["final_verdict"] == "PARTIALLY_VERIFIED"
+    assert res_partial["failure_stage"] == "REF_NOT_FOUND"
+    assert "was not found in the PDF" in res_partial["missing_reason"]
+
+
+def test_v093_quickstart_dynamic_output_and_parsed_row_failure_stage(tmp_path: Path, capsys):
+    """Ensure quickstart_verify.py reports actual delta/direction dynamically and distinguishes
+    'Note 7 found on Page 6, but allocation row not parsed' from 'Note 7 missing from PDF'.
+    """
+    from examples.quickstart_verify import _print_run, build_restructuring_filing_pdf, run_sufficiency_walkthrough
+
+    # 1. Dynamic output when adjusted margin actually EXPANDS (+2.0 pp, answer_flipped=False)
+    full_pdf = build_restructuring_filing_pdf(tmp_path / "full.pdf", include_note7=True)
+    res_full = run_sufficiency_walkthrough(full_pdf)
+    mutated_res = dict(res_full, adj_gm24=48.0, adj_delta_pp=2.0, answer_flipped=False)
+    _print_run("Mutated Expansion", mutated_res)
+    out = capsys.readouterr().out
+    assert "ANSWER CONFIRMED" in out
+    assert "+2.0 pp" in out
+    assert "ANSWER FLIPPED" not in out
+    assert "-5.0 pp" not in out
+
+    # 2. Note 7 present on Page 6, but row renamed to 'Restructuring in Cost of Sales'
+    renamed_pdf = tmp_path / "renamed_row.pdf"
+    raw = full_pdf.read_bytes()
+    assert b"Restructuring in Cost of Goods Sold" in raw
+    # Preserve PDF byte length / xref offsets cleanly by building with identical-length replacement
+    # ("Restructuring in Cost of Goods Sold" = 35 chars -> "Restructuring in Cost of Sales Item" = 35 chars)
+    renamed_pdf.write_bytes(raw.replace(b"Restructuring in Cost of Goods Sold", b"Restructuring in Cost of Sales Item"))
+    res_renamed = run_sufficiency_walkthrough(renamed_pdf)
+    assert res_renamed["final_verdict"] == "PARTIALLY_VERIFIED"
+    assert res_renamed["failure_stage"] == "ALLOCATION_ROW_NOT_PARSED"
+    assert "was found on page(s) [6]" in res_renamed["missing_reason"]
+    assert "was not found in the PDF" not in res_renamed["missing_reason"]
+
 
 
 

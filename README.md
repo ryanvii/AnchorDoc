@@ -31,7 +31,7 @@ pip install -e .
 python3 examples/quickstart_verify.py
 ```
 
-Runs both live cases back-to-back with real `time.perf_counter()` timing, zero hardcoded page numbers, and zero hardcoded operands:
+Runs both live cases back-to-back on a reproducible **6-page synthetic filing** with real `time.perf_counter()` timing, zero hardcoded page numbers, and zero hardcoded operands:
 - **Run A (Complete 6-page filing with Note 7 on Page 6)**: Round 1 hits `[1, 2]` (`GAAP +4.0 pp`) → detects unresolved `Note 7` → Round 2 reads `[6]` → binds 6 cross-page cells (`p2:L03`, `p2:L04`, `p6:L05`) → flips answer to **`-5.0 pp` (`VERIFIED`)**.
 - **Run B (Same filing with Note 7 removed)**: Round 2 searches unread pages, finds no Note 7, refuses to guess → **`PARTIALLY_VERIFIED`** (`INSUFFICIENT_EVIDENCE`).
 

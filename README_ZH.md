@@ -31,7 +31,7 @@ pip install -e .
 python3 examples/quickstart_verify.py
 ```
 
-一次命令背靠背运行两组真实计时（`time.perf_counter()`）、零硬编码页码、零硬编码操作数的完整闭环：
+一次命令在**可复现的 6 页合成财报案例**上背靠背运行两组真实计时（`time.perf_counter()`）、零硬编码页码、零硬编码操作数的完整闭环：
 - **Run A（完整 6 页财报，含第 6 页 Note 7）**：第一轮命中 `[1, 2]`（核验报表 `+4.0 pp`）→ 识别缺失 `Note 7` → 第二轮补读 `[6]` → 跨页绑定 6 个原表单元格（`p2:L03`, `p2:L04`, `p6:L05`）→ 结论反转为 **`-5.0 pp`（`VERIFIED`）**；
 - **Run B（抽掉 Note 7 的 5 页财报）**：第二轮全书补查未见 Note 7 → 拒绝硬猜 → 返回 **`PARTIALLY_VERIFIED`（`INSUFFICIENT_EVIDENCE`）**。
 
