@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -56,6 +57,8 @@
 - **Persistent SQLite WAL `BundleStore` & Prefix-Stable `nav` Caching (`v0.8.0`)**
   - Reloads all **84 SEC PDFs (12,013 pages)** in **`0.330s`** vs `22.13s` cold parse (**`67.1×` faster**, `3.9 ms/PDF`), and persists expensive `VisionPageCard` summaries for `0`-LLM / `0`-render reloads.
   - **T7 3-Run Live Variance & Prefix KV Cache** (30 stratified FinanceBench questions across 5 multi-question SEC 10-Ks on official `DeepSeek-V4.1-Flash`, `temp=0`): **`85.55% ± 3.85%`** E2E Acc, **`100.0% ± 0.0%`** Quote Verified (90/90), **`54.7% ± 10.7%`** real server-side KV prefix cache hit rate (rising to **`65.1%`** warm via prefix-stable `anchordoc_nav`), and **`83.33% ± 0.00%`** deterministic SHA-cached offline replay.
+
+> **Version Reproducibility Note**: `v0.6`, `v0.7`, and `v0.7.1` denote the frozen milestone runs for each benchmark suite above; **`v0.8.0`** preserves the exact retrieval/adjudication core backward-compatibly while adding `BundleStore`, prefix-stable `nav` KV caching, and the 4-tool MCP server (verified on `v0.8.0` live T7 replay at `85.55% ± 3.85%` E2E and `100.0%` quote verification).
 
 See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, ablations, cost-amortization notes, and one-command reproduction scripts.
 
@@ -116,7 +119,9 @@ Give **Claude Code, Cursor, Windsurf, Antigravity, or Devin** progressive, token
 ### 1-Minute MCP Setup (Claude Code / Cursor / Windsurf / Devin)
 
 ```bash
-pip install 'anchordoc[mcp]'
+git clone https://github.com/ryanvii/AnchorDoc.git
+cd AnchorDoc
+pip install -e '.[mcp]'
 ```
 
 Add to your `mcp.json` (Cursor `.cursor/mcp.json`, Claude Desktop/Code `claude_desktop_config.json`, or Windsurf/Devin MCP config):
@@ -170,9 +175,10 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
 ```bibtex
 @software{wu2026anchordoc,
   author  = {Wu, HuiYang},
-  title   = {AnchorDoc: Zero-Index-Cost, Vectorless Verifiable Document Auditing Engine},
+  title   = {AnchorDoc: Zero-Index-Cost Long-Document Context Engineering with Falsifiable Evidence Chains},
   year    = {2026},
   version = {0.8.0},
+  doi     = {10.5281/zenodo.24453581},
   url     = {https://github.com/ryanvii/AnchorDoc},
   license = {Apache-2.0}
 }

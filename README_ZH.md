@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -72,7 +73,9 @@
 ### 1 分钟接入 Claude Code / Cursor / Windsurf / Devin
 
 ```bash
-pip install 'anchordoc[mcp]'
+git clone https://github.com/ryanvii/AnchorDoc.git
+cd AnchorDoc
+pip install -e '.[mcp]'
 ```
 
 在客户端 `mcp.json`（如 Cursor `.cursor/mcp.json` 或 Claude `claude_desktop_config.json`）中添加：
@@ -98,6 +101,8 @@ AnchorDoc 与姊妹项目 **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-
 |---|---|---|---|
 | **超长 PDF 与高风险文档** | **⚓ [AnchorDoc](https://github.com/ryanvii/AnchorDoc)** *（本仓库）* | `doc_outline` → `doc_locate` → `doc_read` → `doc_verify` | 纯 Python + Apache-2.0 `pypdfium2` |
 | **超长视频与屏幕录屏** | **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** | `peek_video_map` → `search_video_moments` → `inspect_frame_range` | `yt-dlp` / `ffmpeg` / `RapidOCR` |
+
+> **版本复现口径说明**：上表 `v0.6` / `v0.7` / `v0.7.1` 为各阶段冻结基准版本；当前 **`v0.8.0`** 向后兼容保留了核心检索与裁决引擎，并在其上新增了 `BundleStore`、前缀稳定 `nav` 缓存与 4 工具 MCP 服务端（`v0.8.0` 30 题实时 T7 审计在 `DeepSeek-V4.1-Flash` 复现 `85.55% ± 3.85%` E2E 与 `100.0%` 引文校验）。
 
 完整榜单、消融实验、成本摊销分析与复现脚本见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。
 
@@ -128,4 +133,16 @@ anchordoc audit submission.pdf --checklist examples/sample_checklist.json --html
 
 ## 开源协议与引用
 
-本项目采用商业友好的 **Apache-2.0** 协议（主包零 AGPL 强依赖）。如果本项目对你的研究或工程有帮助，欢迎通过 [CITATION.cff](CITATION.cff) 引用。
+本项目采用商业友好的 **Apache-2.0** 协议（主包零 AGPL 强依赖）。如果本项目对你的研究或工程有帮助，欢迎通过 [CITATION.cff](CITATION.cff) 或 Zenodo DOI（`10.5281/zenodo.24453581`）引用：
+
+```bibtex
+@software{wu2026anchordoc,
+  author  = {Wu, HuiYang},
+  title   = {AnchorDoc: Zero-Index-Cost Long-Document Context Engineering with Falsifiable Evidence Chains},
+  year    = {2026},
+  version = {0.8.0},
+  doi     = {10.5281/zenodo.24453581},
+  url     = {https://github.com/ryanvii/AnchorDoc},
+  license = {Apache-2.0}
+}
+```
