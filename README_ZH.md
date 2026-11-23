@@ -19,6 +19,8 @@
 
 **AnchorDoc** 摒弃脆弱的固定切块向量 RAG 与昂贵的全书 LLM 预建树，采用 **“0.3s 零 LLM 全文结构锚点图（AnchorMap） + 单次查询感知定位器（Query-Aware Locator） + 选择性视觉页卡与 2×2 高分放大 + 推理优先确定性裁决（Python 权威验算 / 操作数溯源 / 三值视觉门禁 / 两阶段逻辑 NLI）”** 架构，以纯 Apache-2.0 内核实现高准确率、零建索引维护成本与页级可证伪溯源。
 
+![AnchorDoc 演示预览](assets/demo_preview.gif)
+
 ![AnchorDoc 架构图](assets/architecture.svg)
 
 ---
@@ -96,8 +98,6 @@ AnchorDoc 与姊妹项目 **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-
 |---|---|---|---|
 | **超长 PDF 与高风险文档** | **⚓ [AnchorDoc](https://github.com/ryanvii/AnchorDoc)** *（本仓库）* | `doc_outline` → `doc_locate` → `doc_read` → `doc_verify` | 纯 Python + Apache-2.0 `pypdfium2` |
 | **超长视频与屏幕录屏** | **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** | `peek_video_map` → `search_video_moments` → `inspect_frame_range` | `yt-dlp` / `ffmpeg` / `RapidOCR` |
-
-*两仓库刻意保持轻量化独立发布（文档用户无需安装视频转码与 OCR 重依赖），但在 Agent 客户端内可并排挂载，用同一套渐进式心智处理“文档 + 视频”超长多模态上下文。*
 
 完整榜单、消融实验、成本摊销分析与复现脚本见 [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md)。
 

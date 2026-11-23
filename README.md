@@ -19,6 +19,8 @@
 
 **AnchorDoc** replaces brittle chunk-based Vector RAG and expensive upfront LLM tree-indexing with a **0.3s Zero-LLM Structural Anchor Map**, **Query-Aware Single-Shot Evidence Locator** (preserving full pages + continuation tables + printed-page labels), **Selective VisionPageCards + 2×2 Adaptive High-Res Zoom**, and **Reasoning-First Deterministic Adjudication** (authoritative Python AST math, operand provenance, tri-state visual evidence gate, and two-stage logic NLI truth tables).
 
+![AnchorDoc Demo Preview](assets/demo_preview.gif)
+
 ![AnchorDoc Architecture](assets/architecture.svg)
 
 ---
@@ -144,8 +146,6 @@ AnchorDoc shares the exact same **zero-vector, zero-server-LLM, token-budgeted p
 |---|---|---|---|
 | **Long PDFs & Filings** | **⚓ [AnchorDoc](https://github.com/ryanvii/AnchorDoc)** *(this repo)* | `doc_outline` → `doc_locate` → `doc_read` → `doc_verify` | Pure Python + Apache-2.0 `pypdfium2` |
 | **Long Videos & Demos** | **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-mcp)** | `peek_video_map` → `search_video_moments` → `inspect_frame_range` | `yt-dlp` / `ffmpeg` / `RapidOCR` |
-
-*Kept as separate lightweight repositories so document-only users never install video binaries (`ffmpeg`/`OCR`), while AI agents can mount both MCP servers side-by-side under one unified progressive context workflow.*
 
 ---
 
