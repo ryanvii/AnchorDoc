@@ -11,17 +11,37 @@ Requires ZERO LLM API keys and ZERO MCP SDK dependency.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any, Sequence
 
 from .adjudicate.answer_contract import operands_grounded
 from .adjudicate.calc import safe_calc
 from .docbase.pdf_loader import PdfDocument
-from .index.anchor_map import DocumentIndex
+from .index.anchor_map import DocumentIndex, _NOTE_RE, _STMT_RE
 from .retrieve.pipeline import AnchorRetriever
 from .retrieve.router import plan_route, profile_document
-from .runtime.text import estimate_tokens, localize_quote_pages, verify_quote
+from .runtime.text import estimate_tokens, localize_quote_pages, tokenize, verify_quote
 from .store.bundle import BundleStore, load_document
+
+_STMT_INTENT_RULES: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        re.compile(r"\b(?:cash(?:\s+flows?)?|spend|spent|paid|payments?|outflows?|inflows?|capex|capital\s+expenditures?)\b|现金流|现金支出|实际花了|现金", re.I),
+        re.compile(r"statements?\s+of\s+cash\s+flows?|现金流量表", re.I),
+    ),
+    (
+        re.compile(r"\b(?:shareholders?'?\s+equity|stockholders?'?\s+equity|retained\s+earnings|repurchas\w*|buybacks?|dividends?)\b|股东权益|所有者权益|回购", re.I),
+        re.compile(r"statements?\s+of\s+(?:shareholders|stockholders)'?\s+equity|权益变动表", re.I),
+    ),
+    (
+        re.compile(r"\b(?:balance\s+sheets?|total\s+assets|total\s+liabilities|long[\s-]term\s+debt|debt[\s-]to[\s-]asset|working\s+capital)\b|资产负债表|总资产|总负债", re.I),
+        re.compile(r"balance\s+sheets?|资产负债表", re.I),
+    ),
+    (
+        re.compile(r"\b(?:net\s+sales|total\s+revenues?|gross\s+profit|gross\s+margin|operating\s+income|net\s+income|cost\s+of\s+(?:goods\s+sold|sales))\b|利润表|营业收入|毛利|净利润", re.I),
+        re.compile(r"statements?\s+of\s+(?:operations|income|earnings)|利润表", re.I),
+    ),
+)
 
 MAX_OUTLINE_TOKENS = 1_500
 MAX_LOCATE_TOKENS = 1_200
@@ -87,11 +107,58 @@ class DocContext:
         c = self.index.cards[p - 1]
         if p in self.toc_pages:
             return 0
+        if c.heading and _STMT_RE.search(c.heading):
+            return 1
         if c.section_path and (p == 1 or self.index.cards[p - 2].section_path != c.section_path):
             return 1
         if c.has_table or c.table_cues or c.vision_summary:
             return 2
         return 3
+
+    def _page_title(self, p: int) -> str:
+        """Build a concise, informative structural title that never hides primary statement or Note headings."""
+        c = self.index.cards[p - 1]
+        sec = (c.section_path or "").strip()
+        hd = (c.heading or "").strip()
+        if hd and (_STMT_RE.search(hd) or _NOTE_RE.match(hd)):
+            if sec and hd.lower() not in sec.lower():
+                short_sec = sec[:36].rstrip()
+                return f"{hd} [{short_sec}]"[:110]
+            return hd[:110]
+        if sec:
+            if hd and len(hd) <= 64 and hd.lower() not in sec.lower() and not hd.endswith("."):
+                return f"{sec[:48].rstrip()} > {hd}"[:110]
+            return sec[:110]
+        return (hd or f"Page {p}")[:110]
+
+    def _statement_intent_pages(self, query: str, allowed: set[int]) -> list[int]:
+        """Match financial-statement intent cues in ``query`` to L0 primary statement heading pages."""
+        if not query or not allowed:
+            return []
+        q_toks = tokenize(query)
+        bm_scores = self.index.bm_raw.get_scores(q_toks) if q_toks else []
+        matched: list[tuple[float, int]] = []
+        seen: set[int] = set()
+        for q_re, hd_re in _STMT_INTENT_RULES:
+            if not q_re.search(query):
+                continue
+            for p in sorted(allowed):
+                if p in seen or p in self.toc_pages:
+                    continue
+                c = self.index.cards[p - 1]
+                if not c.heading or not hd_re.search(c.heading):
+                    continue
+                # Skip index/TOC listing lines ending with a trailing page number (e.g. "Balance Sheets ... 40")
+                if re.search(r"\s\d{1,3}$", c.heading.strip()):
+                    continue
+                # Require genuine page content relevance (or CJK query on English statement heading)
+                has_cjk = bool(re.search(r"[\u4e00-\u9fff]", query))
+                bm = bm_scores[p - 1] if (p - 1) < len(bm_scores) else 0.0
+                if bm > 0.0 or has_cjk:
+                    seen.add(p)
+                    matched.append((bm, p))
+        matched.sort(key=lambda x: (-x[0], x[1]))
+        return [p for _, p in matched]
 
     def _page_tags(self, p: int) -> list[str]:
         c = self.index.cards[p - 1]
@@ -139,13 +206,11 @@ class DocContext:
             tier = self._page_tier(p)
             if tier > max_tier:
                 continue
-            c = self.index.cards[p - 1]
-            title = (c.section_path or c.heading or f"Page {p}")[:110]
             raw_items.append({
                 "p": p,
                 "label": self.printed_map.get(p, str(p)),
                 "tier": tier,
-                "title": title,
+                "title": self._page_title(p),
                 "tags": self._page_tags(p),
             })
 
@@ -216,6 +281,7 @@ class DocContext:
         allowed = set(range(lo, hi + 1))
 
         page_refs = [p for p in self.index.resolve_page_refs(query) if p in allowed]
+        stmt_hits = self._statement_intent_pages(query, allowed)
         if page_range is not None:
             lex = self.index.demote_toc(self.index.rank_pages_subset(query, sorted(allowed), top_k=max(k * 2, 10)))
         else:
@@ -227,7 +293,17 @@ class DocContext:
             reasons.setdefault(p, []).append("page_ref")
             if p not in ordered:
                 ordered.append(p)
-        for p in lex:
+        # Interleave L0 statement-intent matches right after the top lexical hit so primary
+        # financial statements (e.g. Cash Flows) are not crowded out by verbose quarterly/prose pages.
+        for p in lex[:1]:
+            reasons.setdefault(p, []).append("lexical")
+            if p not in ordered:
+                ordered.append(p)
+        for p in stmt_hits[:2]:
+            reasons.setdefault(p, []).append("statement_intent")
+            if p not in ordered:
+                ordered.append(p)
+        for p in lex[1:]:
             reasons.setdefault(p, []).append("lexical")
             if p not in ordered:
                 ordered.append(p)
@@ -243,18 +319,18 @@ class DocContext:
         used_tok = 50
         truncated = False
         for p in ordered[:k]:
-            c = self.index.cards[p - 1]
             raw_snip = self.retriever._page_snippet(p, weights, budget_chars=snippet_chars, win_chars=min(280, snippet_chars))
             # Strip redundant header line since we return structured fields
             body = "\n".join(raw_snip.splitlines()[1:]).strip()[:snippet_chars]
-            cost = estimate_tokens(body) + estimate_tokens(c.section_path or "") + 24
+            title = self._page_title(p)
+            cost = estimate_tokens(body) + estimate_tokens(title) + 24
             if used_tok + cost > MAX_LOCATE_TOKENS and hits:
                 truncated = True
                 break
             hits.append({
                 "p": p,
                 "label": self.printed_map.get(p, str(p)),
-                "section": c.section_path or c.heading,
+                "section": title,
                 "snippet": body,
                 "why": reasons.get(p, ["lexical"]),
             })

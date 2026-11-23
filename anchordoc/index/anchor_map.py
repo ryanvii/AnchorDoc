@@ -217,11 +217,20 @@ class DocumentIndex:
             lines = [ln for ln in lines if ln.lower() not in _NAV_LINK_LINES and not _LONE_NUM_RE.fullmatch(ln)] or lines
             heading = ""
             for ln in lines[:8]:
-                if 3 <= len(ln) <= 95 and (_HEADING_RE.match(ln) or _TABLE_CUE_RE.search(ln)):
+                if 3 <= len(ln) <= 95 and (_NOTE_RE.match(ln) or _HEADING_RE.match(ln) or _TABLE_CUE_RE.search(ln)):
                     heading = ln
-                    if not sec_by_page and _NOTE_RE.match(ln):
-                        cur_sec = ln
+                    if _NOTE_RE.match(ln):
+                        # Update current section when no explicit bookmark exists on this page,
+                        # so filings with incomplete PDF bookmarks (e.g. missing Item 8) stay accurate.
+                        if not sec_by_page or (pno not in sec_by_page and re.match(r"^(?:ITEM\s+\d+[A-Z]?|PART\s+[IVX]+)\b", ln, re.I)):
+                            cur_sec = ln
                     break
+            if not heading:
+                # Scan slightly deeper for mid-page Note / Item headers (e.g. Note 6 starting after a debt table)
+                for ln in lines[8:18]:
+                    if 5 <= len(ln) <= 90 and _NOTE_RE.match(ln):
+                        heading = ln
+                        break
             if not heading and lines:
                 heading = lines[0][:90]
             num_lines = sum(1 for ln in lines if len(re.findall(r"[$¥€]?\d[\d,.]*", ln)) >= 3)

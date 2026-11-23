@@ -27,12 +27,45 @@ _STOPWORDS = frozenset(
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:['._-][a-z0-9]+)*|[\u4e00-\u9fff]")
 
 
+def _light_inflection_stems(tok: str) -> list[str]:
+    """Conservative zero-dependency English inflection folding for BM25 recall.
+
+    Emits normalized base forms alongside the original token so ``repurchases``,
+    ``repurchased``, and ``repurchase`` match without losing exact-token specificity.
+    """
+    if len(tok) < 5 or not tok.isascii() or not tok.isalpha():
+        return []
+    stems: list[str] = []
+    if tok.endswith("ies") and len(tok) >= 6:
+        stems.append(tok[:-3] + "y")
+    elif (tok.endswith(("ches", "shes", "xes", "zes")) or tok.endswith("sses")) and len(tok) >= 6:
+        stems.append(tok[:-2])
+    elif tok.endswith("s") and not tok.endswith(("ss", "us", "is")):
+        stems.append(tok[:-1])
+    elif tok.endswith("ed") and len(tok) >= 6:
+        # Silent-e verbs (`repurchased` -> `repurchase`, `acquired` -> `acquire`)
+        # plus consonant-ending verbs (`reported` -> `report`, `expanded` -> `expand`).
+        stems.append(tok[:-1])
+        if tok[-3] not in "aeioul":
+            stems.append(tok[:-2])
+    elif tok.endswith("ing") and len(tok) >= 7:
+        base = tok[:-3]
+        stems.append(base)
+        stems.append(base + "e")
+    return [s for s in stems if len(s) >= 3 and s != tok and s not in _STOPWORDS]
+
+
 def tokenize(text: str, drop_stop: bool = True) -> list[str]:
-    """Bilingual (English word + CJK character) tokenizer."""
-    toks = _TOKEN_RE.findall((text or "").lower())
-    if drop_stop:
-        toks = [t for t in toks if (len(t) > 1 or "\u4e00" <= t <= "\u9fff") and t not in _STOPWORDS]
-    return toks
+    """Bilingual (English word + light inflection stem + CJK character) tokenizer."""
+    raw = _TOKEN_RE.findall((text or "").lower())
+    out: list[str] = []
+    for t in raw:
+        if drop_stop and ((len(t) <= 1 and not ("\u4e00" <= t <= "\u9fff")) or t in _STOPWORDS):
+            continue
+        out.append(t)
+        for st in _light_inflection_stems(t):
+            out.append(st)
+    return out
 
 
 class BM25Okapi:
