@@ -1,24 +1,39 @@
-"""Independent claim verification & adversarial financial/audit recomputation engine (v0.9.0).
+"""Independent claim verification & adversarial financial/audit recomputation engine (v0.9.1).
 
 Allows ANY caller (users of RAG, PageIndex, raw long-context LLMs, or human analysts) to hand
 AnchorDoc a PDF plus an external claim (quotes, operands with row/period/unit bindings, formula,
-and claimed result) and get deterministic, falsifiable verification catching:
+and claimed result) and get deterministic, scope-explicit verification catching:
 - ``QUOTE_SIGN_FLIP`` / ``QUOTE_NOT_FOUND``: sign flips (`-12%` vs `12%`, `$(500)` vs `$500`)
 - ``SIGN_FLIP``: negative operand/result misrepresented as positive (or vice versa)
 - ``PERIOD_MISMATCH``: value exists on the page/row but belongs to a DIFFERENT fiscal period/year
 - ``ROW_LABEL_MISMATCH``: value does not belong to the claimed table row / line item
 - ``UNIT_SCALE_MISMATCH``: million vs billion vs thousand scale confusion
 - ``PP_VS_PCT_CONFUSION``: percentage points (`pp`) confused with relative percent (`%`)
+- ``FORMULA_OPERAND_UNBOUND``: formula uses a number or symbol NOT bound to any verified operand
 - ``FORMULA_MISMATCH``: independent Python AST recomputation disagrees with ``claimed_value``
+- ``CLAIM_UNSUPPORTED_BY_EVIDENCE``: claim asserts numbers/facts not substantiated by verified quotes/computation
+
+Verdict Contract (Scoped Honesty):
+- ``VERIFIED``: Every checked layer passed AND no unverified numeric claim assertions remain.
+- ``PARTIALLY_VERIFIED``: Some evidence (e.g. a quote) exists verbatim, but the overall claim
+  itself is NOT substantiated (e.g., irrelevant quote attached to an unverified numeric claim).
+- ``FAILED``: At least one hard contradiction / fabrication / arithmetic / binding error caught.
+- ``UNVERIFIED``: No verifiable evidence was supplied.
 """
 from __future__ import annotations
 
+import ast
+import operator
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from .adjudicate import safe_calc
-from .adjudicate.answer_contract import operands_grounded
+from .adjudicate.answer_contract import (
+    _TRIVIAL_CONSTANTS,
+    _formula_signed_operands,
+    operands_grounded,
+)
 from .docbase import PdfDocument
 from .runtime.text import (
     _norm_ws_punct,
@@ -83,6 +98,15 @@ _PERIOD_RE = re.compile(
     re.I,
 )
 
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
 
 def normalize_unit(unit: str | None) -> tuple[str, float] | None:
     u = (unit or "").strip().lower()
@@ -122,6 +146,57 @@ def _extract_periods_in_line(line: str) -> list[str]:
     return found
 
 
+def _safe_eval_bound_formula(
+    formula: str,
+    symbol_map: dict[str, float],
+) -> tuple[float | None, list[str]]:
+    """Safely evaluate an arithmetic AST expression that may reference bound operand names.
+
+    Returns ``(value, unbound_symbols)``. Never uses ``eval()``.
+    """
+    expr = (formula or "").strip()
+    if not expr:
+        return None, []
+    expr = re.sub(r"(?<=\d),(?=\d{3}\b)", "", expr)
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return None, []
+
+    unbound: list[str] = []
+
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            if node.id in symbol_map:
+                return float(symbol_map[node.id])
+            if node.id not in unbound:
+                unbound.append(node.id)
+            return 0.0
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+            return float(_UNARY_OPS[type(node.op)](_eval(node.operand)))
+        if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if isinstance(node.op, ast.Pow) and abs(right) > 10:
+                raise ValueError("Exponent too large")
+            if isinstance(node.op, ast.Div) and right == 0:
+                raise ZeroDivisionError("Division by zero")
+            return float(_BIN_OPS[type(node.op)](left, right))
+        raise ValueError(f"Unsupported AST node: {type(node).__name__}")
+
+    try:
+        val = _eval(tree)
+    except Exception:
+        return None, unbound
+    if unbound:
+        return None, unbound
+    return val, []
+
+
 # ---------------------------------------------------------------------------
 # Line-level table row + header period extraction
 # ---------------------------------------------------------------------------
@@ -156,7 +231,6 @@ def parse_page_rows(page: int, page_text: str) -> list[ParsedRow]:
 
         periods = _extract_periods_in_line(stripped)
         nums = extract_signed_numbers(stripped)
-        # Header line detection: contains >=2 distinct years/periods and no non-year numeric values
         non_year_nums = [
             v for v, pct, _ in nums
             if not (not pct and 1900 <= v <= 2100 and float(int(v)) == v)
@@ -165,7 +239,6 @@ def parse_page_rows(page: int, page_text: str) -> list[ParsedRow]:
             active_periods = periods
             continue
 
-        # Extract label prefix (text before first numeric/currency token)
         label_part = re.split(
             r"(?:(?:\s{2,}|\t|\|)\s*(?:[$¥€£(+-]?\s*\d))|(?:[:：]\s*(?:[$¥€£(+-]?\s*\d))",
             stripped,
@@ -174,7 +247,6 @@ def parse_page_rows(page: int, page_text: str) -> list[ParsedRow]:
         if not label_part:
             label_part = re.sub(r"[$¥€£(+-]?\d[\d,]*(?:\.\d+)?%?", " ", stripped).strip()
 
-        # Filter out inline period years from row numeric values when multiple column periods are active
         row_vals: list[tuple[float, bool, str]] = []
         inline_periods = periods if (len(periods) == 1 and not active_periods) else []
         for v, pct, raw_tok in nums:
@@ -283,11 +355,8 @@ def verify_operand(
             "detail": f"Row label {row_label!r} not found in scope pages {pages_to_check}.",
         }
 
-    # Evaluate each candidate matching row
     best_diag: tuple[int, str, str, ParsedRow | None] | None = None
-    # Severity priority (higher = closer diagnostic match to report if none passes)
     for row in label_rows:
-        # 1. Check unit scale compatibility if both claimed unit and table unit are known monetary scales
         unit_mismatch = False
         unit_ratio = 1.0
         if claimed_unit and row.table_unit:
@@ -298,10 +367,8 @@ def verify_operand(
                 unit_mismatch = True
                 unit_ratio = cu_mult / tu_mult
 
-        # Determine target value(s) for the requested period
         target_vals: list[tuple[float, bool, str]] = row.values
         other_period_vals: list[tuple[str, float]] = []
-        period_idx: int | None = None
         if period and row.periods:
             if period in row.periods:
                 period_idx = row.periods.index(period)
@@ -311,18 +378,14 @@ def verify_operand(
                         if i != period_idx and i < len(row.periods):
                             other_period_vals.append((row.periods[i], ov))
             else:
-                # Row has explicit periods, none matching requested period
                 other_period_vals = [
                     (row.periods[i], row.values[i][0])
                     for i in range(min(len(row.periods), len(row.values)))
                 ]
                 target_vals = []
 
-        # Exact match check on target_vals
         for sv, spct, sraw in target_vals:
-            # Check percentage vs non-percentage mismatch when claimed unit is explicit %
             if claimed_unit and claimed_unit[0] == "percent" and not spct and abs(sv) < 1.0 and _nums_close(sv * 100.0, val):
-                # e.g., source has 0.12 and claim says 12% -> valid representation
                 sv_eff = sv * 100.0
             else:
                 sv_eff = sv
@@ -353,7 +416,6 @@ def verify_operand(
                     "table_unit": row.table_unit[0] if row.table_unit else None,
                 }
 
-            # Sign flip check on exact target cell
             if val != 0 and _nums_close(sv_eff, -val):
                 cand = (
                     100,
@@ -364,7 +426,6 @@ def verify_operand(
                 if best_diag is None or cand[0] > best_diag[0]:
                     best_diag = cand
 
-            # Scale mismatch check (e.g. 1200 million claimed as 1.2 million or 1200 billion)
             if sv != 0 and strict_scale:
                 for factor in (1e3, 1e-3, 1e6, 1e-6):
                     if _nums_close(sv * factor, val):
@@ -377,7 +438,6 @@ def verify_operand(
                         if best_diag is None or cand[0] > best_diag[0]:
                             best_diag = cand
 
-            # Also check converted value if claimed unit differs (e.g. table 1200 million, claim 1.2 billion -> VALID!)
             if unit_mismatch and _nums_close(sv, val * unit_ratio):
                 return {
                     "name": name,
@@ -395,7 +455,6 @@ def verify_operand(
                     "note": f"Unit conversion verified ({sv} {row.table_unit[0]} == {val} {claimed_unit[0]})",
                 }
 
-        # Period mismatch check: value belongs to a DIFFERENT period column on the same row!
         for other_p, ov in other_period_vals:
             if _nums_close(ov, val):
                 target_desc = target_vals[0][2] if target_vals else "N/A"
@@ -424,9 +483,8 @@ def verify_operand(
             "source_line": row.raw_line if row else None,
         }
 
-    # Check if the value exists on another row (cross-row hallucination)
     for row in all_rows:
-        for sv, _, sraw in row.values:
+        for sv, _, _ in row.values:
             if _nums_close(sv, val):
                 return {
                     "name": name,
@@ -465,9 +523,9 @@ def _detect_pp_vs_pct_confusion(
     f = (formula or "").strip()
     text = (claim_text or "").lower()
 
-    # Case 1: Subtracting two percentage rates (e.g., 42.0 - 38.0 = 4.0) produces percentage points (pp),
-    # NOT a relative percentage increase (`%` / `percent`)!
-    is_rate_diff = bool(re.fullmatch(r"\s*-?\d+(?:\.\d+)?\s*-\s*-?\d+(?:\.\d+)?\s*", f))
+    is_rate_diff = bool(
+        re.fullmatch(r"\s*(?:-?\d+(?:\.\d+)?|[A-Za-z_]\w*)\s*-\s*(?:-?\d+(?:\.\d+)?|[A-Za-z_]\w*)\s*", f)
+    )
     ops_are_pct = bool(operands) and all(
         (normalize_unit(str(o.get("unit") or "")) or ("", 0))[0] == "percent"
         for o in operands
@@ -481,19 +539,31 @@ def _detect_pp_vs_pct_confusion(
                 f"Formula {f!r} subtracts two percentage rates, which yields percentage points (pp), "
                 f"not relative percent ({claimed_unit!r})."
             )
-        if not cu and re.search(r"(?:increased|decreased|rose|fell|up|down|提高|增长|下降)\s*(?:by|了)?\s*-?\d+(?:\.\d+)?\s*%(?!\s*p)", text):
+        if not cu and re.search(
+            r"(?:increased|decreased|rose|fell|up|down|提高|增长|下降)\s*(?:by|了)?\s*-?\d+(?:\.\d+)?\s*%(?!\s*p)",
+            text,
+        ):
             if "percentage point" not in text and "百分点" not in text and "pp" not in text:
                 return (
                     f"Formula {f!r} computes a percentage-point difference, but claim text states `%` instead of `pp`/percentage points."
                 )
 
-    # Case 2: Relative percentage change `(a - b) / b * 100` claimed as `pp`
     is_rel_change = "/" in f and ("-" in f) and ("100" in f or "100.0" in f)
     if is_rel_change and cu and cu[0] == "pp":
         return (
             f"Formula {f!r} computes a relative percentage change (%), not percentage points ({claimed_unit!r})."
         )
     return None
+
+
+def _extract_non_year_claim_numbers(claim_text: str) -> list[float]:
+    """Extract numeric assertions from claim_text, ignoring fiscal years (1900-2099)."""
+    out: list[float] = []
+    for v, pct, _ in extract_signed_numbers(claim_text or ""):
+        if not pct and 1900 <= v <= 2099 and float(int(v)) == v:
+            continue
+        out.append(v)
+    return out
 
 
 def verify_claim(
@@ -508,18 +578,30 @@ def verify_claim(
     cited_pages: Sequence[int] = (),
     strict_scale: bool = True,
 ) -> dict[str, Any]:
-    """Deterministically verify an external claim (from any LLM/RAG/PageIndex) against a PDF.
+    """Deterministically verify an external claim against a PDF with scoped honesty guarantees.
 
-    Zero LLM calls. Returns a falsifiable verification report with explicit ``verdict``
-    (``VERIFIED`` | ``FAILED`` | ``UNVERIFIED``), ``error_codes``, per-quote checks,
-    per-operand row/period/unit bindings, and independent Python AST recomputation.
+    Key v0.9.1 guarantees:
+    1. Formula-to-Operand Binding: When structured ``operands`` are supplied alongside a ``formula``,
+       every non-trivial numeric literal OR symbolic identifier in ``formula`` MUST bind to a
+       verified operand (preventing "evidence laundering" where valid operands mask a wrong formula
+       like ``1200 - 700 = 500`` when bound operands are ``1200`` and ``720``).
+    2. Scoped Verdict Contract: Explicitly reports per-layer status in ``checks``
+       (``quotes``, ``operands``, ``computation``, ``claim_alignment``) and ``verified_scope``.
+       Attaching a true-but-irrelevant quote to an unverified numeric claim returns
+       ``PARTIALLY_VERIFIED`` (``verified=False``), NEVER ``VERIFIED``.
     """
     error_codes: list[str] = []
+    warning_codes: list[str] = []
     diagnostics: list[str] = []
 
     def _add_err(code: str, msg: str) -> None:
         if code not in error_codes:
             error_codes.append(code)
+        diagnostics.append(f"[{code}] {msg}")
+
+    def _add_warn(code: str, msg: str) -> None:
+        if code not in warning_codes:
+            warning_codes.append(code)
         diagnostics.append(f"[{code}] {msg}")
 
     # 1. Verbatim quote verification (sign- and percent-preserving!)
@@ -547,7 +629,6 @@ def verify_claim(
         ok = bool(found_pages) or ok_hint
         err_code: str | None = None
         if not ok:
-            # Distinguish QUOTE_SIGN_FLIP (text matched after stripping punctuation, but sign/percent flipped!)
             nq = _norm_ws_punct(qtext)
             candidate_pages = [hp] if (hp and 1 <= hp <= doc.num_pages) else list(range(1, doc.num_pages + 1))
             sign_flipped = any(nq and nq in _norm_ws_punct(doc.page_text(p)) for p in candidate_pages)
@@ -569,7 +650,7 @@ def verify_claim(
             "overlap": 1.0 if ok else ov_hint,
         })
 
-    # Determine grounding scope pages
+    # Grounding scope pages
     valid_cited = [int(p) for p in (cited_pages or ()) if 1 <= int(p) <= doc.num_pages]
     scope_pages: list[int] = list(localized_pages)
     for cp in valid_cited:
@@ -596,6 +677,8 @@ def verify_claim(
 
     # 2. Structured operand verification (row + period + unit + sign)
     operand_results: list[dict[str, Any]] = []
+    verified_op_values: list[float] = []
+    verified_op_symbols: dict[str, float] = {}
     for op in operands or ():
         if not isinstance(op, dict):
             continue
@@ -603,35 +686,70 @@ def verify_claim(
         operand_results.append(res)
         if not res["verified"]:
             _add_err(res["error_code"], res.get("detail", ""))
-        elif res.get("matched_page") and res["matched_page"] not in scope_pages:
-            scope_pages.append(res["matched_page"])
+        else:
+            v = float(res["value"])
+            verified_op_values.append(v)
+            op_name = str(res.get("name") or "").strip()
+            if op_name and re.fullmatch(r"[A-Za-z_]\w*", op_name):
+                verified_op_symbols[op_name] = v
+            if res.get("matched_page") and res["matched_page"] not in scope_pages:
+                scope_pages.append(res["matched_page"])
 
-    # 3. Formula AST recomputation & operand grounding
-    calc_val = safe_calc(formula) if formula else None
+    # 3. Formula AST recomputation & STRICT operand binding (no evidence laundering!)
+    calc_val: float | None = None
     formula_ops_ok = True
     ungrounded_ops: list[str] = []
+    has_symbolic_vars = bool(formula and re.search(r"[A-Za-z_]\w*", formula))
+
     if formula:
-        if calc_val is None:
-            _add_err("INVALID_FORMULA", f"Cannot evaluate arithmetic formula {formula!r} via Python AST.")
-        if not operand_results:
-            # Ground raw formula operands against scope pages (or all pages if un-scoped)
-            check_pages = scope_pages or list(range(1, doc.num_pages + 1))
-            scope_text = "\n".join(doc.page_text(p) for p in check_pages)
-            formula_ops_ok, ungrounded_ops = operands_grounded(
-                formula, scope_text, strict_scale=strict_scale
-            )
-            if not formula_ops_ok:
-                # Check if any ungrounded operand is specifically a sign flip
-                signed_src = [v for v, _, _ in extract_signed_numbers(scope_text)]
-                for raw_op in ungrounded_ops:
-                    try:
-                        ov = float(raw_op)
-                    except ValueError:
+        if has_symbolic_vars:
+            calc_val, unbound_syms = _safe_eval_bound_formula(formula, verified_op_symbols)
+            if unbound_syms:
+                formula_ops_ok = False
+                ungrounded_ops.extend(unbound_syms)
+                _add_err(
+                    "FORMULA_OPERAND_UNBOUND",
+                    f"Formula {formula!r} references unbound symbol(s) {unbound_syms} not present in verified operands {sorted(verified_op_symbols)}.",
+                )
+            elif calc_val is None:
+                _add_err("INVALID_FORMULA", f"Cannot evaluate symbolic formula {formula!r} via Python AST.")
+        else:
+            calc_val = safe_calc(formula)
+            if calc_val is None:
+                _add_err("INVALID_FORMULA", f"Cannot evaluate arithmetic formula {formula!r} via Python AST.")
+
+            # ALWAYS check every numeric operand in formula!
+            if operand_results:
+                # Strict binding against the verified structured operands: prevents passing
+                # valid operands [1200, 720] while sneaking `1200 - 700 = 500` in formula!
+                for raw_op, ov in _formula_signed_operands(formula):
+                    if abs(ov) in _TRIVIAL_CONSTANTS:
                         continue
-                    if ov != 0 and any(_nums_close(sv, -ov) for sv in signed_src):
-                        _add_err("SIGN_FLIP", f"Formula operand {raw_op} appears in source ONLY with opposite sign.")
-                    else:
-                        _add_err("OPERAND_NOT_FOUND", f"Formula operand {raw_op} not grounded in scope pages {check_pages}.")
+                    if not any(_nums_close(ov, bv) for bv in verified_op_values):
+                        formula_ops_ok = False
+                        ungrounded_ops.append(raw_op)
+                if ungrounded_ops:
+                    _add_err(
+                        "FORMULA_OPERAND_UNBOUND",
+                        f"Formula {formula!r} uses operand(s) {ungrounded_ops} that do NOT match any verified bound operand ({verified_op_values}).",
+                    )
+            else:
+                check_pages = scope_pages or list(range(1, doc.num_pages + 1))
+                scope_text = "\n".join(doc.page_text(p) for p in check_pages)
+                formula_ops_ok, ungrounded_ops = operands_grounded(
+                    formula, scope_text, strict_scale=strict_scale
+                )
+                if not formula_ops_ok:
+                    signed_src = [v for v, _, _ in extract_signed_numbers(scope_text)]
+                    for raw_op in ungrounded_ops:
+                        try:
+                            ov = float(raw_op)
+                        except ValueError:
+                            continue
+                        if ov != 0 and any(_nums_close(sv, -ov) for sv in signed_src):
+                            _add_err("SIGN_FLIP", f"Formula operand {raw_op} appears in source ONLY with opposite sign.")
+                        else:
+                            _add_err("OPERAND_NOT_FOUND", f"Formula operand {raw_op} not grounded in scope pages {check_pages}.")
 
         if claimed_value is not None and calc_val is not None:
             try:
@@ -642,7 +760,6 @@ def verify_claim(
                 if cv != 0 and _nums_close(calc_val, -cv):
                     _add_err("SIGN_FLIP", f"Formula {formula!r} evaluates to {calc_val}, opposite sign of claimed {cv}.")
                 elif not _nums_close(calc_val, cv):
-                    # Also check 100x percent vs fraction representation (e.g. 0.40 vs 40%)
                     cu = normalize_unit(claimed_unit)
                     if not (cu and cu[0] == "percent" and _nums_close(calc_val * 100.0, cv)):
                         _add_err("FORMULA_MISMATCH", f"Formula {formula!r} evaluates to {calc_val}, but claimed value is {cv}.")
@@ -652,18 +769,104 @@ def verify_claim(
     if pp_err:
         _add_err("PP_VS_PCT_CONFUSION", pp_err)
 
+    # 5. Claim-to-Evidence Alignment Check: prevent irrelevant verbatim quote from granting VERIFIED
+    # to an unverified numeric claim (e.g., claim="Gross profit is 500" + quote about 65% debt covenant).
+    claim_alignment_status = "not_checked"
+    if claim_text.strip():
+        claim_nums = _extract_non_year_claim_numbers(claim_text)
+        if claim_nums:
+            substantiated_nums: list[float] = list(verified_op_values)
+            if calc_val is not None and not error_codes:
+                substantiated_nums.append(calc_val)
+                # Also include percent-scaled form if unit is percent
+                cu = normalize_unit(claimed_unit)
+                if cu and cu[0] == "percent" and abs(calc_val) < 1.0:
+                    substantiated_nums.append(calc_val * 100.0)
+            for qr in quote_results:
+                if qr["verified"]:
+                    for qv, _, _ in extract_signed_numbers(qr["text"]):
+                        substantiated_nums.append(qv)
+
+            unsubstantiated = [
+                cn for cn in claim_nums
+                if not any(_nums_close(cn, sn) for sn in substantiated_nums)
+            ]
+            if unsubstantiated:
+                claim_alignment_status = "unverified"
+                _add_warn(
+                    "CLAIM_UNSUPPORTED_BY_EVIDENCE",
+                    f"Claim asserts number(s) {unsubstantiated} that are NOT substantiated by any verified quote, bound operand, or recomputed formula.",
+                )
+            else:
+                claim_alignment_status = "verified"
+        else:
+            # Qualitative claim with only quote(s) — quote existence alone does not prove semantic entailment
+            if quote_results and not operand_results and not formula:
+                claim_alignment_status = "unverified"
+                _add_warn(
+                    "CLAIM_ENTAILMENT_NOT_CHECKED",
+                    "Quote(s) verified verbatim, but semantic entailment of the free-text claim is not verified deterministically.",
+                )
+            elif operand_results or formula:
+                claim_alignment_status = "verified"
+
+    # 6. Per-layer structured status & Scoped Verdict
+    quotes_status = (
+        "not_checked"
+        if not quote_results
+        else ("verified" if all(r["verified"] for r in quote_results) else "failed")
+    )
+    operands_status = (
+        "not_checked"
+        if not operand_results
+        else ("verified" if all(r["verified"] for r in operand_results) else "failed")
+    )
+    computation_status = (
+        "not_checked"
+        if not formula
+        else (
+            "failed"
+            if any(
+                c in error_codes
+                for c in (
+                    "INVALID_FORMULA",
+                    "FORMULA_OPERAND_UNBOUND",
+                    "FORMULA_MISMATCH",
+                    "SIGN_FLIP",
+                    "OPERAND_NOT_FOUND",
+                    "PP_VS_PCT_CONFUSION",
+                )
+            )
+            else "verified"
+        )
+    )
+
+    checks = {
+        "quotes": quotes_status,
+        "operands": operands_status,
+        "computation": computation_status,
+        "claim_alignment": claim_alignment_status,
+    }
+    verified_scope = [k for k, v in checks.items() if v == "verified"]
+
     has_any_check = bool(quote_results or operand_results or formula)
     if not has_any_check:
         verdict = "UNVERIFIED"
     elif error_codes:
         verdict = "FAILED"
+    elif warning_codes:
+        # Some evidence checked out (e.g., verbatim quote exists), but overall claim is NOT verified!
+        verdict = "PARTIALLY_VERIFIED"
     else:
         verdict = "VERIFIED"
 
     return {
         "verdict": verdict,
         "verified": verdict == "VERIFIED",
+        "checks": checks,
+        "verified_scope": verified_scope,
         "error_codes": error_codes,
+        "warning_codes": warning_codes,
         "diagnostics": diagnostics,
         "claim_text": claim_text,
         "quotes": quote_results,
@@ -674,7 +877,9 @@ def verify_claim(
         "claimed_value": claimed_value,
         "claimed_unit": claimed_unit,
         "operands_grounded": (
-            all(r["verified"] for r in operand_results) if operand_results else formula_ops_ok
+            (all(r["verified"] for r in operand_results) and formula_ops_ok)
+            if operand_results
+            else formula_ops_ok
         ),
         "ungrounded_operands": ungrounded_ops,
         "grounding_scope": scope_kind,

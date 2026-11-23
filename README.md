@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
-[![Adversarial Verify](https://img.shields.io/badge/Adversarial%20Verify%2024q-100%25%20Catch%20%7C%200%25%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v090)
+[![Adversarial Verify](https://img.shields.io/badge/Adversarial%20Verify%2028q-100%25%20Catch%20%7C%200%25%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v091)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -22,6 +22,8 @@
 **AnchorDoc** replaces brittle chunk-based Vector RAG and expensive upfront LLM tree-indexing with a **0.3s Zero-LLM Structural Anchor Map**, **Query-Aware Single-Shot Evidence Locator** (preserving full pages + continuation tables + printed-page labels), **Selective VisionPageCards + 2×2 Adaptive High-Res Zoom**, and **Reasoning-First Deterministic Adjudication** (authoritative Python AST math, operand provenance, tri-state visual evidence gate, and two-stage logic NLI truth tables).
 
 ![AnchorDoc Demo Preview](assets/demo_preview.gif)
+
+> **Full 1080p HD Launch Demos**: [English 1080p MP4](https://github.com/ryanvii/AnchorDoc/releases/download/v0.9.1/anchordoc_launch_en.mp4) · [中文 1080p MP4](https://github.com/ryanvii/AnchorDoc/releases/download/v0.9.1/anchordoc_launch_zh.mp4)
 
 ![AnchorDoc Architecture](assets/architecture.svg)
 
@@ -40,15 +42,16 @@
 
 ---
 
-## Independent Claim Verification: Verify ANY AI Answer (`v0.9.0`, Zero API Key)
+## Independent Claim Verification: Verify ANY AI Answer (`v0.9.1`, Zero API Key)
 
-Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an external claim (quotes, operands bound to row/period/unit, and formula) to AnchorDoc **before signing off**. Ordinary citation checkers strip punctuation and silently pass `-12%` as `12%` or accept last year's number from the same page; AnchorDoc deterministically catches:
+Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an external claim (quotes, operands bound to row/period/unit, and symbolic or numeric formula) to AnchorDoc **before signing off**. Every report states explicitly **what was verified** (`checks: {quotes, operands, computation, claim_alignment}` + `verified_scope`) with a 4-state verdict (`VERIFIED` | `PARTIALLY_VERIFIED` | `FAILED` | `UNVERIFIED`):
 
-- **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**: `-12%` vs `12%`, accounting parentheses `$(145)` vs `$145` (even when `+12%` exists elsewhere on the same page!)
+- **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**: `-12%` vs `12%`, accounting parentheses `$(145)` vs `$145` (even when `+12%` exists elsewhere on the same page)
 - **`PERIOD_MISMATCH`**: value exists on the row/page, but came from `FY2023` while claiming `FY2024`
 - **`UNIT_SCALE_MISMATCH`**: `in millions` vs `billions` confusion (while passing valid `$1,200M == $1.2B` conversions)
 - **`PP_VS_PCT_CONFUSION`**: margin difference `40.0% - 36.0% = 4.0 pp` mislabeled as `4.0%`
-- **`ROW_LABEL_MISMATCH`** & **`FORMULA_MISMATCH`**: cross-row grabs & Python AST arithmetic mismatches
+- **`FORMULA_OPERAND_UNBOUND`** (anti-laundering): supports direct symbolic formulas (`rev - cogs`) and rejects any numeric literal/symbol in `formula` not bound to a verified cell operand (blocks valid `[1200, 720]` operands masking `1200 - 700 = 500`)
+- **`CLAIM_UNSUPPORTED_BY_EVIDENCE`** (scoped honesty): attaching a true-but-irrelevant verbatim quote to an unverified numeric claim returns `PARTIALLY_VERIFIED` (`quotes=verified`, `claim_alignment=unverified`), **never** `VERIFIED`
 
 ### Run the Clean-Clone Adversarial Mini-Bench in 1 Second (0 Downloads, 0 API Keys)
 
@@ -56,17 +59,17 @@ Already using **RAG, PageIndex, or long-context LLMs**? Pass any PDF plus an ext
 python3 benchmarks/run_adversarial_verify.py
 ```
 
-| Verifier (24 Cases: 14 Adversarial Traps + 10 Valid Claims) | Trap Catch Rate (↑) | False-Pass Rate (↓) | False-Alarm Rate (↓) | Exact Error Diagnosis |
+| Verifier (28 Cases: 17 Adversarial Traps + 11 Valid Claims) | Trap Catch Rate (↑) | False-Pass Rate (↓) | False-Alarm Rate (↓) | Exact Error Diagnosis |
 |---|---:|---:|---:|---:|
-| Naive Alphanumeric Citation & Loose Number Check | `7.1%` (1/14) | `92.9%` (13/14) | `0.0%` (0/10) | — |
-| **⚓ AnchorDoc `v0.9.0` (`verify_claim` / `doc_verify`)** | **`100.0%` (14/14)** | **`0.0%` (0/14)** | **`0.0%` (0/10)** | **`14 / 14`** |
+| Naive Alphanumeric Citation & Loose Number Check | `11.8%` (2/17) | `88.2%` (15/17) | `9.1%` (1/11) | — |
+| **⚓ AnchorDoc `v0.9.1` (`verify_claim` / `doc_verify`)** | **`100.0%` (17/17)** | **`0.0%` (0/17)** | **`0.0%` (0/11)** | **`17 / 17`** |
 
 ```bash
-# Verify any external AI claim from CLI (exit 0 = VERIFIED, exit 2 = FAILED with exact error codes)
+# Verify any external AI claim with cell-bound symbolic formula (exit 0 = VERIFIED, exit 2 = FAILED / PARTIAL)
 anchordoc verify-claim report.pdf \
-  --claim "Gross margin increased by 4.0% from FY2023 to FY2024." \
-  --operands-json '[{"name":"FY24 GM","value":40.0,"unit":"%","row_label":"Gross Margin","period":"FY2024","page":2},{"name":"FY23 GM","value":36.0,"unit":"%","row_label":"Gross Margin","period":"FY2023","page":2}]' \
-  --formula "40.0 - 36.0" --claimed-value 4.0 --claimed-unit "%"
+  --claim "FY2024 Gross profit is 480 million." \
+  --operands-json '[{"name":"rev","value":1200,"unit":"million","row_label":"Total Revenue","period":"FY2024","page":2},{"name":"cogs","value":720,"unit":"million","row_label":"Cost of Goods Sold","period":"FY2024","page":2}]' \
+  --formula "rev - cogs" --claimed-value 480 --claimed-unit "million"
 ```
 
 ![AnchorDoc Public Benchmarks](assets/benchmark_comparison.svg)

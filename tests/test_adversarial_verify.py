@@ -97,3 +97,67 @@ def test_cli_verify_claim_and_mcp_doc_verify_end_to_end(tmp_path: Path, capsys):
     )
     assert ok_res["verified"] is True
     assert ok_res["calc_value"] == 480.0
+
+
+def test_scoped_honesty_blocks_evidence_laundering_and_irrelevant_quote(tmp_path: Path):
+    """Regression tests for exact red-team cases:
+    1. Valid operands [1200, 720] + sneaky formula `1200 - 700 = 500` MUST FAIL (`FORMULA_OPERAND_UNBOUND`).
+    2. False numeric claim `Gross profit is 500` + true unrelated covenant quote MUST NOT return VERIFIED
+       (returns `PARTIALLY_VERIFIED` with quotes=verified, claim_alignment=unverified).
+    3. Symbolic formula `rev - cogs = 480` bound directly to verified cell operands returns `VERIFIED`
+       with explicit `checks` and `verified_scope`.
+    """
+    pdf = build_sample_filing_pdf(tmp_path / "filing.pdf")
+    doc = PdfDocument.from_pdf(pdf)
+
+    # Case 1: Evidence laundering attack (valid operands + wrong literal in formula)
+    launder = verify_claim(
+        doc,
+        operands=[
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        formula="1200 - 700",
+        claimed_value=500,
+        claimed_unit="million",
+    )
+    assert launder["verdict"] == "FAILED"
+    assert launder["verified"] is False
+    assert "FORMULA_OPERAND_UNBOUND" in launder["error_codes"]
+    assert launder["checks"]["operands"] == "verified"
+    assert launder["checks"]["computation"] == "failed"
+
+    # Case 2: Unrelated true quote attached to unverified numeric claim
+    irrel = verify_claim(
+        doc,
+        claim_text="Gross profit is 500 million.",
+        quotes=[{"text": "Debt-to-Asset Ratio shall not exceed 65.0% at fiscal year-end.", "page": 3}],
+    )
+    assert irrel["verdict"] == "PARTIALLY_VERIFIED"
+    assert irrel["verified"] is False
+    assert irrel["checks"]["quotes"] == "verified"
+    assert irrel["checks"]["operands"] == "not_checked"
+    assert irrel["checks"]["computation"] == "not_checked"
+    assert irrel["checks"]["claim_alignment"] == "unverified"
+    assert "CLAIM_UNSUPPORTED_BY_EVIDENCE" in irrel["warning_codes"]
+
+    # Case 3: Symbolic formula referencing bound operands directly
+    sym = verify_claim(
+        doc,
+        claim_text="FY2024 Gross profit is 480 million.",
+        operands=[
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        formula="rev - cogs",
+        claimed_value=480,
+        claimed_unit="million",
+    )
+    assert sym["verdict"] == "VERIFIED"
+    assert sym["verified"] is True
+    assert sym["calc_value"] == 480.0
+    assert sym["checks"]["operands"] == "verified"
+    assert sym["checks"]["computation"] == "verified"
+    assert sym["checks"]["claim_alignment"] == "verified"
+    assert set(sym["verified_scope"]) == {"operands", "computation", "claim_alignment"}
+

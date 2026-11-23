@@ -316,7 +316,44 @@ CASES: list[dict[str, Any]] = [
         "claimed_value": 520,
         "claimed_unit": "million",
     },
-    # --- 10 VALID GROUND-TRUTH CLAIMS (expected_verified = True; measures False-Alarm Rate) ---
+    {
+        "id": "ADV-15",
+        "category": "evidence_laundering",
+        "description": "Evidence laundering: valid bound operands [1200, 720] attached, but formula sneaks `1200 - 700 = 500`!",
+        "expected_verified": False,
+        "expected_error": "FORMULA_OPERAND_UNBOUND",
+        "operands": [
+            {"name": "FY2024 Revenue", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "FY2024 COGS", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "1200 - 700",
+        "claimed_value": 500,
+        "claimed_unit": "million",
+    },
+    {
+        "id": "ADV-16",
+        "category": "irrelevant_quote_laundering",
+        "description": "Irrelevant verbatim quote: claims `Gross profit is 500` with a true but unrelated 65.0% debt covenant quote!",
+        "expected_verified": False,
+        "expected_error": "CLAIM_UNSUPPORTED_BY_EVIDENCE",
+        "claim_text": "Gross profit is 500 million.",
+        "quotes": [{"text": "Debt-to-Asset Ratio shall not exceed 65.0% at fiscal year-end.", "page": 3}],
+    },
+    {
+        "id": "ADV-17",
+        "category": "unbound_symbol",
+        "description": "Symbolic formula references unbound variable `ghost_cost` not in verified operands.",
+        "expected_verified": False,
+        "expected_error": "FORMULA_OPERAND_UNBOUND",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - ghost_cost",
+        "claimed_value": 500,
+        "claimed_unit": "million",
+    },
+    # --- 11 VALID GROUND-TRUTH CLAIMS (expected_verified = True; measures False-Alarm Rate) ---
     {
         "id": "VAL-01",
         "category": "valid_negative_quote",
@@ -412,6 +449,20 @@ CASES: list[dict[str, Any]] = [
         "expected_verified": True,
         "quotes": [{"text": "Debt-to-Asset Ratio shall not exceed 65.0% at fiscal year-end.", "page": 3}],
     },
+    {
+        "id": "VAL-11",
+        "category": "valid_symbolic_formula",
+        "description": "Symbolic formula `rev - cogs = 480` directly bound to verified cell operands.",
+        "expected_verified": True,
+        "claim_text": "FY2024 Gross profit is 480 million.",
+        "operands": [
+            {"name": "rev", "value": 1200, "unit": "million", "row_label": "Total Revenue", "period": "FY2024", "page": 2},
+            {"name": "cogs", "value": 720, "unit": "million", "row_label": "Cost of Goods Sold", "period": "FY2024", "page": 2},
+        ],
+        "formula": "rev - cogs",
+        "claimed_value": 480,
+        "claimed_unit": "million",
+    },
 ]
 
 
@@ -450,8 +501,10 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
                     naive_false_pass += 1
                 if a_ok:
                     ad_false_pass += 1
-                elif c.get("expected_error") in ad_res["error_codes"]:
-                    ad_exact_error += 1
+                else:
+                    all_codes = list(ad_res.get("error_codes") or []) + list(ad_res.get("warning_codes") or [])
+                    if c.get("expected_error") in all_codes:
+                        ad_exact_error += 1
             else:
                 if not n_ok:
                     naive_false_alarm += 1
@@ -465,13 +518,15 @@ def run_benchmark(out_json: Path | None = None) -> dict[str, Any]:
                 "expected_verified": exp,
                 "naive_verified": n_ok,
                 "anchordoc_verified": a_ok,
-                "anchordoc_errors": ad_res["error_codes"],
+                "anchordoc_verdict": ad_res["verdict"],
+                "anchordoc_checks": ad_res["checks"],
+                "anchordoc_errors": list(ad_res.get("error_codes") or []) + list(ad_res.get("warning_codes") or []),
                 "diagnostics": ad_res["diagnostics"],
                 "citations": ad_res["citations"],
             })
 
     summary = {
-        "benchmark": "AnchorDoc v0.9.0 Adversarial Financial Verification Mini-Bench (0 API keys)",
+        "benchmark": "AnchorDoc v0.9.1 Adversarial Financial Verification Mini-Bench (0 API keys)",
         "total_cases": len(CASES),
         "adversarial_traps": len(traps),
         "valid_claims": len(valids),
@@ -508,7 +563,7 @@ def main() -> int:
     print(f"\n=== {res['benchmark']} ===")
     print(f"Cases: {res['total_cases']} ({res['adversarial_traps']} adversarial traps + {res['valid_claims']} valid claims)")
     print(f"Naive Citation/Number Check -> Catch Rate: {nv['trap_catch_rate_%']:5.1f}% | False-Pass: {nv['false_pass_rate_%']:5.1f}% ({nv['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {nv['false_alarm_rate_%']:5.1f}%")
-    print(f"AnchorDoc v0.9.0 Verifier   -> Catch Rate: {ad['trap_catch_rate_%']:5.1f}% | False-Pass: {ad['false_pass_rate_%']:5.1f}% ({ad['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {ad['false_alarm_rate_%']:5.1f}% | Exact Diag: {ad['exact_error_code_match']}")
+    print(f"AnchorDoc v0.9.1 Verifier   -> Catch Rate: {ad['trap_catch_rate_%']:5.1f}% | False-Pass: {ad['false_pass_rate_%']:5.1f}% ({ad['false_pass_count']}/{res['adversarial_traps']}) | False-Alarm: {ad['false_alarm_rate_%']:5.1f}% | Exact Diag: {ad['exact_error_code_match']}")
     print("\nPer-case breakdown:")
     for d in res["details"]:
         tag = "TRAP " if not d["expected_verified"] else "VALID"

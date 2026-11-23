@@ -11,7 +11,7 @@ from .store import BundleStore, load_document
 from .types import AuditVerdict, ExtractedRequirement, PageCard, RetrievalTrace, SourceLine, SpanCard
 from .verify import verify_claim, verify_operand
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 __all__ = [
     "__version__",

@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
-[![对抗核验](https://img.shields.io/badge/对抗核验%2024题-100%25%20拦截%20%7C%200%25%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v090零-api-key)
+[![对抗核验](https://img.shields.io/badge/对抗核验%2028题-100%25%20拦截%20%7C%200%25%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v091零-api-key)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
@@ -22,6 +22,8 @@
 **AnchorDoc** 摒弃脆弱的固定切块向量 RAG 与昂贵的全书 LLM 预建树，采用 **“0.3s 零 LLM 全文结构锚点图（AnchorMap） + 单次查询感知定位器（Query-Aware Locator） + 选择性视觉页卡与 2×2 高分放大 + 推理优先确定性裁决（Python 权威验算 / 操作数溯源 / 三值视觉门禁 / 两阶段逻辑 NLI）”** 架构，以纯 Apache-2.0 内核实现高准确率、零建索引维护成本与页级可证伪溯源。
 
 ![AnchorDoc 演示预览](assets/demo_preview.gif)
+
+> **完整 1080p 高清演示视频**：[中文 1080p 演示视频 (MP4)](https://github.com/ryanvii/AnchorDoc/releases/download/v0.9.1/anchordoc_launch_zh.mp4) · [English 1080p Demo (MP4)](https://github.com/ryanvii/AnchorDoc/releases/download/v0.9.1/anchordoc_launch_en.mp4)
 
 ![AnchorDoc 架构图](assets/architecture.svg)
 
@@ -40,15 +42,16 @@
 
 ---
 
-## 独立复算与对抗核验：拿任意外部 AI 结论来验（`v0.9.0`，零 API Key）
+## 独立复算与对抗核验：拿任意外部 AI 结论来验（`v0.9.1`，零 API Key）
 
-无论你的团队用 **传统 RAG、PageIndex 还是超长上下文大模型** 生成了财报或合同结论，交付签字前都可以直接把「PDF + 外部结论」丢给 AnchorDoc 做确定性把关。普通引文检查会去掉标点，甚至把 `-12%` 当成 `12%` 放行；AnchorDoc 确定性拦截 6 大高危陷阱：
+无论你的团队用 **传统 RAG、PageIndex 还是超长上下文大模型** 生成了财报或合同结论，交付签字前都可以直接把「PDF + 外部结论」丢给 AnchorDoc 做确定性把关。每份报告均分域汇报已证实范围（`checks: {quotes, operands, computation, claim_alignment}` + `verified_scope`），并给出四态诚实判定（`VERIFIED` | `PARTIALLY_VERIFIED` | `FAILED` | `UNVERIFIED`）：
 
 - **`QUOTE_SIGN_FLIP` / `SIGN_FLIP`**：正负号翻转（`-12%` 冒充 `12%`，哪怕同页别处正好有 `+12%` 也拦截）、会计括号负数 `$(145)` / `(8.4%)` 误读为正；
 - **`PERIOD_MISMATCH`**：年份/期间错列（拿去年的数冒充今年，即使两个数都在同一页也能指出哪列取错）；
 - **`UNIT_SCALE_MISMATCH`**：百万（`in millions`）与十亿（`billions`）偷换（同时放行合法换算如 `$1,200M == $1.2B`）；
 - **`PP_VS_PCT_CONFUSION`**：把毛利率差值 `40.0% - 36.0% = 4.0 pp` 错写成 `4.0%`；
-- **`ROW_LABEL_MISMATCH` & `FORMULA_MISMATCH`**：串行抓数与 Python AST 独立重算误差。
+- **`FORMULA_OPERAND_UNBOUND`（防证据洗白）**：支持公式直接引用已绑定单元格操作数名（如 `rev - cogs`），任何公式里未绑定到已核验操作数的裸数字或变量一律拦截（彻底封堵“附带真操作数 `[1200, 720]` 却偷算 `1200 - 700 = 500`”）；
+- **`CLAIM_UNSUPPORTED_BY_EVIDENCE`（分域诚实）**：给未证实的数值结论附上一句真实但无关的引文，仅返回 `PARTIALLY_VERIFIED`（明确标出“引文已找到、结论仍待核验”），**绝不发笼统绿勾**。
 
 ### 干净克隆 1 秒复现对抗核验微型基准（0 外网下载 · 0 API Key）
 
@@ -56,10 +59,10 @@
 python3 benchmarks/run_adversarial_verify.py
 ```
 
-| 核验器（24 题：14 个对抗陷阱 + 10 条合法正确答案） | 错答案拦截率 (↑) | 错答案漏放率 (↓) | 正确答案误拦率 (↓) | 精确错因归类 |
+| 核验器（28 题：17 个对抗陷阱 + 11 条合法正确答案） | 错答案拦截率 (↑) | 错答案漏放率 (↓) | 正确答案误拦率 (↓) | 精确错因归类 |
 |---|---:|---:|---:|---:|
-| 朴素字母数字引文与宽松数值检查 | `7.1%` (1/14) | `92.9%` (13/14) | `0.0%` (0/10) | — |
-| **⚓ AnchorDoc `v0.9.0`（`verify_claim` / `doc_verify`）** | **`100.0%` (14/14)** | **`0.0%` (0/14)** | **`0.0%` (0/10)** | **`14 / 14`** |
+| 朴素字母数字引文与宽松数值检查 | `11.8%` (2/17) | `88.2%` (15/17) | `9.1%` (1/11) | — |
+| **⚓ AnchorDoc `v0.9.1`（`verify_claim` / `doc_verify`）** | **`100.0%` (17/17)** | **`0.0%` (0/17)** | **`0.0%` (0/11)** | **`17 / 17`** |
 
 ![AnchorDoc 公开基准对比](assets/benchmark_comparison.svg)
 
