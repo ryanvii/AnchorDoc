@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ryanvii/anchordoc",
+  "title": "AnchorDoc",
+  "description": "Zero-LLM MCP server for progressive long-PDF navigation, cross-page evidence localization, quote verification, and auditable AST math.",
+  "repository": {
+    "url": "https://github.com/ryanvii/AnchorDoc",
+    "source": "github"
+  },
+  "version": "0.9.3",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "anchordoc",
+      "version": "0.9.3",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "named",
+          "name": "--root",
+          "description": "Local directory containing PDF or DOCX documents to expose in read-only mode",
+          "isRequired": true,
+          "default": "."
+        }
+      ]
+    }
+  ]
+}

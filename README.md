@@ -246,3 +246,5 @@ If you use AnchorDoc or its reproducible benchmarks in your work, please cite vi
   license = {Apache-2.0}
 }
 ```
+
+<!-- mcp-name: io.github.ryanvii/anchordoc -->
