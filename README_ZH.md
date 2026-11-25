@@ -12,6 +12,7 @@
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
 [![MCP](https://img.shields.io/badge/MCP%20Server-零%20LLM%20四工具-0f172a.svg)](#ai-agent-渐进式-mcp-服务端零-api-key)
+[![AnchorDoc MCP server](https://glama.ai/mcp/servers/ryanvii/AnchorDoc/badges/score.svg)](https://glama.ai/mcp/servers/ryanvii/AnchorDoc)
 
 [English](README.md) | **简体中文**
 
