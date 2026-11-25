@@ -27,11 +27,13 @@ class PageCard:
     years: tuple[str, ...] = ()
     text_head: str = ""
     vision_summary: str = ""
+    subheadings: tuple[str, ...] = ()
 
     def card_text(self) -> str:
         parts = [
             (self.section_path + " ") * 2 if self.section_path else "",
             (self.heading + " ") * 2 if self.heading else "",
+            (" ".join(self.subheadings) + " ") * 2 if self.subheadings else "",
             (" ".join(self.table_cues) + " ") * 2 if self.table_cues else "",
             " ".join(self.years),
             "structured_table numeric_table" if self.has_table else "",

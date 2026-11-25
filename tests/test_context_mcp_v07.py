@@ -171,3 +171,64 @@ def test_outline_exposes_primary_statements_and_locate_boosts_cash_flows():
         assert 5 in top_pages[:3], f"Expected Cash Flows page 5 in top-3 for {q!r}, got {top_pages}"
         assert 4 in top_pages[:3], f"Expected Equity page 4 in top-3 for {q!r}, got {top_pages}"
 
+
+def test_pagecard_captures_multiple_subheadings_and_surfaces_in_outline_and_locate():
+    """Verify full-page subheading capture for multi-section pages (lower-page Notes & subsections)."""
+    lower_note_page = "\n".join(
+        [
+            "Note 6 - Debt and Credit Facilities",
+            "Maturity schedule of senior notes:",
+            "2025 1,200 1,150 4.5%",
+            "2026 2,400 2,350 4.8%",
+            "2027 3,100 3,050 5.0%",
+            "2028 1,800 1,750 5.1%",
+            *[f"Debt covenant disclosure paragraph line {i} detailing interest coverage ratios." for i in range(1, 18)],
+            "Note 7 - Restructuring and Impairment Charges",
+            "During FY2024 the company booked $180 million of one-time restructuring charges inside COGS.",
+        ]
+    )
+    cn_multi_sub_page = "\n".join(
+        [
+            "第三章 商务与技术要求",
+            "3.1 交货期限",
+            "合同签订后 30 日历天内完成全部设备供货并到场安装。",
+            "3.2 质保期限",
+            "本项目整体免费质保期不少于 3 年。",
+            "3.3 售后服务响应",
+            "接到故障通知后 2 小时内响应，24 小时内到达现场。",
+        ]
+    )
+    pages = [
+        "Overview\nGeneral summary mentioning restructuring briefly in passing.",
+        lower_note_page,
+        cn_multi_sub_page,
+    ]
+    doc = PdfDocument.from_pages(pages, page_labels=["1", "2", "3"])
+    ctx = DocContext.from_document(doc, doc_id="multi_subhead_test")
+
+    c2 = ctx.index.cards[1]
+    assert c2.heading == "Note 6 - Debt and Credit Facilities"
+    assert "Note 7 - Restructuring and Impairment Charges" in c2.subheadings
+    # Numeric table rows must NOT be treated as subheadings
+    assert not any(sh.startswith("2025") for sh in c2.subheadings)
+    assert "Note 7 - Restructuring and Impairment Charges" in c2.card_text()
+
+    c3 = ctx.index.cards[2]
+    assert "3.1 交货期限" in c3.subheadings
+    assert "3.2 质保期限" in c3.subheadings
+    assert "3.3 售后服务响应" in c3.subheadings
+
+    # Global structural outline & L0 doc_outline(depth=2) both surface lower-page Note 7 & subsections
+    struct_outline = ctx.index.build_structural_outline()
+    assert "Note 7 - Restructuring and Impairment Charges" in struct_outline
+
+    out = ctx.outline(depth=2, max_items=20)
+    assert out["est_tokens"] <= MAX_OUTLINE_TOKENS
+    by_p = {it["p"]: it for it in out["items"]}
+    assert "Note 7 - Restructuring and Impairment Charges" in by_p[2]["subheadings"]
+    assert "3.3 售后服务响应" in by_p[3]["subheadings"]
+
+    loc = ctx.locate("Note 7 Restructuring and Impairment Charges", k=3)
+    assert loc["hits"][0]["p"] == 2
+
+

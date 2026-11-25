@@ -30,6 +30,15 @@ _NOTE_RE = re.compile(
     r"CHAPTER\s+\d+|SECTION\s+\d+|第[一二三四五六七八九十百\d]+[章节])",
     re.I,
 )
+_SUBHEAD_STRUCT_RE = re.compile(
+    r"^(?:NOTE\s+\d+[\s.:\-—]+.{2,80}|ITEM\s+\d+[A-Z]?[\s.:\-—]+.{2,80}|PART\s+[IVX]+\b.{0,70}|"
+    r"(?:CHAPTER|SECTION|ARTICLE)\s+[IVX\d]+[\s.:\-—]*.{0,75}|"
+    r"第[一二三四五六七八九十百\d]+[章节条款][^\n]{0,60}|"
+    r"[一二三四五六七八九十]+[、.．]\s*[^\d\s][^\n]{1,50}|"
+    r"[（(][一二三四五六七八九十\d]+[）)]\s*[^\d\s][^\n]{1,50}|"
+    r"\d+(?:\.\d+){1,3}\.?\s+[^\d\s][^\n]{1,70})$",
+    re.I,
+)
 _YEAR_RE = re.compile(r"\b20(?:1[5-9]|2[0-9])\b")
 
 # --- Printed-TOC signals -------------------------------------------------------------------
@@ -233,6 +242,25 @@ class DocumentIndex:
                         break
             if not heading and lines:
                 heading = lines[0][:90]
+            toc_flag = is_toc_like(text, pno)
+            subheadings: list[str] = []
+            if not toc_flag:
+                seen_hd = {heading.strip().lower()} if heading else set()
+                for ln in lines:
+                    s_ln = ln.strip()
+                    if not (3 <= len(s_ln) <= 90):
+                        continue
+                    if s_ln.endswith((".", "。", ";", "；", ",", "，")):
+                        continue
+                    if _is_table_row(s_ln) or _is_numeric_dense(s_ln) or re.search(r"\s\d{1,3}$", s_ln):
+                        continue
+                    if _SUBHEAD_STRUCT_RE.match(s_ln) or _STMT_RE.search(s_ln):
+                        key = s_ln.lower()
+                        if key not in seen_hd:
+                            seen_hd.add(key)
+                            subheadings.append(s_ln[:90])
+                            if len(subheadings) >= 4:
+                                break
             num_lines = sum(1 for ln in lines if len(re.findall(r"[$¥€]?\d[\d,.]*", ln)) >= 3)
             cues = tuple(sorted({m.group(0).lower() for m in _TABLE_CUE_RE.finditer((text or "")[:2500])})[:8])
             years = tuple(sorted(set(_YEAR_RE.findall((text or "")[:2000])))[:6])
@@ -241,12 +269,13 @@ class DocumentIndex:
                     page=pno,
                     section_path=cur_sec,
                     heading=heading,
-                    is_toc=is_toc_like(text, pno),
+                    is_toc=toc_flag,
                     has_table=num_lines >= 4,
                     table_cues=cues,
                     years=years,
                     text_head=" ".join(lines[:10])[:450],
                     vision_summary=self.vision_summaries.get(pno, ""),
+                    subheadings=tuple(subheadings),
                 )
             )
         return cards
@@ -485,11 +514,15 @@ class DocumentIndex:
             if vsum:
                 head_blob = f"{head_blob} | {vsum[:90]}"[:155]
             c = self.cards[p - 1]
+            if c.subheadings:
+                sub_extra = " ; ".join(sh for sh in c.subheadings if sh.lower() not in head_blob.lower())
+                if sub_extra:
+                    head_blob = f"{head_blob} | {sub_extra}"[:175]
             tag = " [TABLE]" if c.has_table else ""
 
-            if _STMT_RE.search(" ".join(clean[:6])):
+            if _STMT_RE.search(" ".join(clean[:6])) or any(_STMT_RE.search(sh) for sh in c.subheadings):
                 anchors.append((0, p, f"p.{p}: {head_blob}{tag}"))
-            elif any(_NOTE_RE.match(ln) for ln in clean[:5]):
+            elif any(_NOTE_RE.match(ln) for ln in clean[:5]) or any(_NOTE_RE.match(sh) for sh in c.subheadings):
                 anchors.append((1, p, f"p.{p}: {head_blob}{tag}"))
             elif c.has_table and len(c.table_cues) >= 2:
                 anchors.append((2, p, f"p.{p}: {head_blob}{tag}"))

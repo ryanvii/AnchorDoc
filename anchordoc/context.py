@@ -107,11 +107,11 @@ class DocContext:
         c = self.index.cards[p - 1]
         if p in self.toc_pages:
             return 0
-        if c.heading and _STMT_RE.search(c.heading):
+        if (c.heading and _STMT_RE.search(c.heading)) or any(_STMT_RE.search(sh) for sh in c.subheadings):
             return 1
         if c.section_path and (p == 1 or self.index.cards[p - 2].section_path != c.section_path):
             return 1
-        if c.has_table or c.table_cues or c.vision_summary:
+        if c.has_table or c.table_cues or c.vision_summary or c.subheadings:
             return 2
         return 3
 
@@ -146,10 +146,8 @@ class DocContext:
                 if p in seen or p in self.toc_pages:
                     continue
                 c = self.index.cards[p - 1]
-                if not c.heading or not hd_re.search(c.heading):
-                    continue
-                # Skip index/TOC listing lines ending with a trailing page number (e.g. "Balance Sheets ... 40")
-                if re.search(r"\s\d{1,3}$", c.heading.strip()):
+                cand_heads = [h.strip() for h in (c.heading, *c.subheadings) if h and h.strip()]
+                if not any(hd_re.search(h) and not re.search(r"\s\d{1,3}$", h) for h in cand_heads):
                     continue
                 # Require genuine page content relevance (or CJK query on English statement heading)
                 has_cjk = bool(re.search(r"[\u4e00-\u9fff]", query))
@@ -206,13 +204,17 @@ class DocContext:
             tier = self._page_tier(p)
             if tier > max_tier:
                 continue
-            raw_items.append({
+            c = self.index.cards[p - 1]
+            entry: dict[str, Any] = {
                 "p": p,
                 "label": self.printed_map.get(p, str(p)),
                 "tier": tier,
                 "title": self._page_title(p),
                 "tags": self._page_tags(p),
-            })
+            }
+            if c.subheadings:
+                entry["subheadings"] = list(c.subheadings)
+            raw_items.append(entry)
 
         if not raw_items and self.doc.num_pages > 0:
             # Uniformly sample anchor pages when no headings match tier cutoff
@@ -234,7 +236,8 @@ class DocContext:
             if len(items) >= max_items:
                 truncated = True
                 break
-            cost = estimate_tokens(f"{it['p']} {it['label']} {it['title']} {' '.join(it['tags'])}") + 10
+            sub_txt = " ".join(it.get("subheadings") or [])
+            cost = estimate_tokens(f"{it['p']} {it['label']} {it['title']} {sub_txt} {' '.join(it['tags'])}") + 10
             if used_tok + cost > MAX_OUTLINE_TOKENS and items:
                 truncated = True
                 break
