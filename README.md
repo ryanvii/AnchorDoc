@@ -5,13 +5,14 @@
 **Let AI Agents Read Long PDFs on Demand — Locate Cross-Page Evidence & Verify Every Claim**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/anchordoc.svg)](https://pypi.org/project/anchordoc/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
 [![Synthetic Regression](https://img.shields.io/badge/Synthetic%20Regression%2033q-22%2F22%20Blocked%20%7C%200%2F11%20False--Alarm-059669.svg)](#independent-claim-verification-verify-any-ai-answer-v093)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20Metrics-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20Charts-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
-[![MCP](https://img.shields.io/badge/MCP%20Server-Zero--LLM%204%20Tools-0f172a.svg)](#mcp-server-for-ai-agents-zero-api-key)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.ryanvii%2Fanchordoc-0f172a.svg)](https://registry.modelcontextprotocol.io/v0.1/servers?search=anchordoc)
 [![AnchorDoc MCP server](https://glama.ai/mcp/servers/ryanvii/AnchorDoc/badges/score.svg)](https://glama.ai/mcp/servers/ryanvii/AnchorDoc)
 
 **English** | [简体中文](README_ZH.md)
@@ -119,9 +120,7 @@ See [benchmarks/LEADERBOARD.md](benchmarks/LEADERBOARD.md) for complete tables, 
 ## 60-Second Quickstart
 
 ```bash
-git clone https://github.com/ryanvii/AnchorDoc.git
-cd AnchorDoc
-pip install -e .
+pip install anchordoc
 
 # 1. Zero-LLM structural inspection (NO API key required — runs in ~0.2s!)
 anchordoc outline annual_report_10k.pdf
@@ -168,22 +167,26 @@ Give **Claude Code, Cursor, Windsurf, Antigravity, or Devin** progressive, token
 
 *(Even on the 8 completely untruncated PDFs where 100% of text fit in Native Full-PDF, AnchorDoc MCP still won **`87.5%` vs `50.0%`** by preventing long-context attention decay.)*
 
-### 1-Minute MCP Setup (Claude Code / Cursor / Windsurf / Devin)
+### 10-Second MCP Setup (Official MCP Registry: `io.github.ryanvii/anchordoc`)
+
+Run zero-install with `uvx` (or install globally via `pip install anchordoc`):
 
 ```bash
-git clone https://github.com/ryanvii/AnchorDoc.git
-cd AnchorDoc
-pip install -e '.[mcp]'
+# Claude Code (one command)
+claude mcp add anchordoc -- uvx anchordoc mcp --root /path/to/your/pdfs
+
+# Codex CLI (one command)
+codex mcp add anchordoc -- uvx anchordoc mcp --root /path/to/your/pdfs
 ```
 
-Add to your `mcp.json` (Cursor `.cursor/mcp.json`, Claude Desktop/Code `claude_desktop_config.json`, or Windsurf/Devin MCP config):
+Or add to your `mcp.json` (Cursor `.cursor/mcp.json`, Claude Desktop `claude_desktop_config.json`, or Windsurf/Cline/Devin MCP config):
 
 ```json
 {
   "mcpServers": {
     "anchordoc": {
-      "command": "anchordoc",
-      "args": ["mcp", "--root", "/path/to/your/pdfs"]
+      "command": "uvx",
+      "args": ["anchordoc", "mcp", "--root", "/path/to/your/pdfs"]
     }
   }
 }

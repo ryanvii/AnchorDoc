@@ -5,13 +5,14 @@
 **让 AI Agent 按问题读长文档，找到回答所需的跨页证据并核验答案**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/anchordoc.svg)](https://pypi.org/project/anchordoc/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)
 [![合成回归](https://img.shields.io/badge/合成回归%2033题-22%2F22%20拦截%20%7C%200%2F11%20误拦-059669.svg)](#独立复算与对抗核验拿任意外部-ai-结论来验v093零-api-key)
 [![FinanceBench](https://img.shields.io/badge/FinanceBench%20150%2F150-85.3%25%20E2E%20%7C%2096%25%20数值表-16a34a.svg)](benchmarks/LEADERBOARD.md)
 [![MMLongBench](https://img.shields.io/badge/MMLongBench--Doc-68.3%25%20E2E%20%7C%2054.5%25%20图表-2563eb.svg)](benchmarks/LEADERBOARD.md)
 [![ContractNLI](https://img.shields.io/badge/ContractNLI--Long-81.3%25%20F1%20%7C%2010%25%20FER-7c3aed.svg)](benchmarks/LEADERBOARD.md)
-[![MCP](https://img.shields.io/badge/MCP%20Server-零%20LLM%20四工具-0f172a.svg)](#ai-agent-渐进式-mcp-服务端零-api-key)
+[![MCP Registry](https://img.shields.io/badge/MCP%20官方注册表-io.github.ryanvii%2Fanchordoc-0f172a.svg)](https://registry.modelcontextprotocol.io/v0.1/servers?search=anchordoc)
 [![AnchorDoc MCP server](https://glama.ai/mcp/servers/ryanvii/AnchorDoc/badges/score.svg)](https://glama.ai/mcp/servers/ryanvii/AnchorDoc)
 
 [English](README.md) | **简体中文**
@@ -116,22 +117,26 @@ python3 benchmarks/run_adversarial_verify.py
 
 *（即便在 8 份 100% 全文未截断的财报上，AnchorDoc MCP 仍以 **`87.5%` vs `50.0%`** 大幅领先，直接规避超长上下文注意力衰减。）*
 
-### 1 分钟接入 Claude Code / Cursor / Windsurf / Devin
+### 10 秒零安装接入 Claude Code / Cursor / Codex / Windsurf（已上架 MCP 官方注册表：`io.github.ryanvii/anchordoc`）
+
+直接使用 `uvx` 一行免安装启动（或 `pip install anchordoc`）：
 
 ```bash
-git clone https://github.com/ryanvii/AnchorDoc.git
-cd AnchorDoc
-pip install -e '.[mcp]'
+# Claude Code 一键接入
+claude mcp add anchordoc -- uvx anchordoc mcp --root /path/to/your/pdfs
+
+# Codex CLI 一键接入
+codex mcp add anchordoc -- uvx anchordoc mcp --root /path/to/your/pdfs
 ```
 
-在客户端 `mcp.json`（如 Cursor `.cursor/mcp.json` 或 Claude `claude_desktop_config.json`）中添加：
+或在客户端 `mcp.json`（如 Cursor `.cursor/mcp.json`、Claude `claude_desktop_config.json` 或 Windsurf/Cline 配置）中添加：
 
 ```json
 {
   "mcpServers": {
     "anchordoc": {
-      "command": "anchordoc",
-      "args": ["mcp", "--root", "/path/to/your/pdfs"]
+      "command": "uvx",
+      "args": ["anchordoc", "mcp", "--root", "/path/to/your/pdfs"]
     }
   }
 }
@@ -157,9 +162,7 @@ AnchorDoc 与姊妹项目 **🎬 [vidctx-mcp](https://github.com/ryanvii/vidctx-
 ## 60 秒快速上手
 
 ```bash
-git clone https://github.com/ryanvii/AnchorDoc.git
-cd AnchorDoc
-pip install -e .
+pip install anchordoc
 
 # 1. 无需任何 API Key：0.2 秒查看全文结构锚点图与印刷目录页码偏移
 anchordoc outline annual_report_10k.pdf
