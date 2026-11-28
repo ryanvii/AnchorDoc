@@ -5,6 +5,7 @@
 **Let AI Agents Read Long PDFs on Demand — Locate Cross-Page Evidence & Verify Every Claim**
 
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/ryanvii/AnchorDoc/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanvii/AnchorDoc/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/anchordoc.svg)](https://pypi.org/project/anchordoc/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab.svg)](pyproject.toml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24453581.svg)](https://doi.org/10.5281/zenodo.24453581)

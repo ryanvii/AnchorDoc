@@ -1,0 +1,95 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Verify & Build Distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Verify tag matches pyproject.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: python
+        run: |
+          import os, tomllib
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          with open("pyproject.toml", "rb") as f:
+              ver = tomllib.load(f)["project"]["version"]
+          assert tag == ver, f"Tag v{tag} does not match pyproject.toml version {ver}"
+          print(f"Verified release version: {ver}")
+
+      - name: Run offline test suite
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pytest -v
+
+      - name: Build sdist & wheel and run twine check
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI (OIDC Trusted Publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/anchordoc
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: publish-pypi
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
